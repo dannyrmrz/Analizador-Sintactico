@@ -1,17 +1,14 @@
 """
 token_stream.py
 ===============
-Puente entre la salida del lexer generado por YALex y el analizador sintáctico.
+Puente entre la salida del lexer generado por YALex y el parser.
 
-El lexer generado imprime líneas con el formato:
-    TOKEN <NOMBRE> "<lexema>" (line L, col C)
-    LEXICAL_ERROR line L col C: "<byte>"
+El lexer generado imprime lineas como:
+    TOKEN NAME "lexeme" (line L, col C)
+    LEXICAL_ERROR line L col C: "byte"
 
-Este módulo:
-  1. Ejecuta el lexer generado sobre un archivo de entrada, O
-  2. Lee una lista de líneas ya producidas por el lexer.
-  3. Convierte cada línea en un objeto Token que el parser puede consumir.
-  4. Ignora tokens marcados como SKIP (espacios en blanco, comentarios).
+Este modulo convierte esa salida en objetos Token, filtra tokens ignorados
+por YAPar y deja una funcion de validacion para comparar tokens YAPar/YALex.
 """
 from __future__ import annotations
 
@@ -19,54 +16,42 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from typing import List, Optional, Iterator
+from typing import Iterable, Iterator, List, Optional, Set
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Estructura básica de token
-# ──────────────────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class Token:
     """Representa un token producido por el lexer."""
-    type: str          # Nombre del token (p. ej. 'ID', 'PLUS', 'EOF')
-    lexeme: str        # Valor del lexema tal como apareció en el fuente
-    line: int          # Línea donde se encontró
-    col: int           # Columna donde se encontró
+
+    type: str
+    lexeme: str
+    line: int
+    col: int
 
     def __repr__(self) -> str:
         return f"Token({self.type!r}, {self.lexeme!r}, line={self.line}, col={self.col})"
 
 
-# Marcador especial de fin de entrada
 EOF_TOKEN = Token(type="$", lexeme="<EOF>", line=-1, col=-1)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Parseo de la salida textual del lexer
-# ──────────────────────────────────────────────────────────────────────────────
-
-# Patrón para líneas válidas del lexer:
-#   TOKEN NOMBRE "lexema" (line L, col C)
 _TOKEN_RE = re.compile(
-    r'^TOKEN\s+'
-    r'(?P<type>[A-Za-z_][A-Za-z_0-9]*)\s+'
+    r"^TOKEN\s+"
+    r"(?P<type>[A-Za-z_][A-Za-z_0-9]*)\s+"
     r'(?P<lexeme>"(?:[^"\\]|\\.)*")\s+'
-    r'\(line\s+(?P<line>\d+),\s*col\s+(?P<col>\d+)\)\s*$'
+    r"\(line\s+(?P<line>\d+),\s*col\s+(?P<col>\d+)\)\s*$"
 )
 
-# Patrón para errores léxicos:
-#   LEXICAL_ERROR line L col C: "byte"
 _ERROR_RE = re.compile(
-    r'^LEXICAL_ERROR\s+line\s+(?P<line>\d+)\s+col\s+(?P<col>\d+):\s*(?P<byte>.+)$'
+    r"^LEXICAL_ERROR\s+line\s+(?P<line>\d+)\s+col\s+(?P<col>\d+):\s*(?P<byte>.+)$"
 )
 
-# Tokens que siempre se saltan (generados con 'return lexbuf' o skip=True)
 _SKIP_TYPES = {"SKIP"}
 
 
 @dataclass
 class LexerOutput:
-    """Resultado del análisis léxico: lista de tokens y lista de errores."""
+    """Resultado del analisis lexico."""
+
     tokens: List[Token] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
 
@@ -74,27 +59,27 @@ class LexerOutput:
         return bool(self.errors)
 
 
+@dataclass
+class TokenConsistencyReport:
+    """Resultado de comparar tokens declarados en YAPar contra tokens de YALex."""
+
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    declared_tokens: Set[str] = field(default_factory=set)
+    ignored_tokens: Set[str] = field(default_factory=set)
+    produced_token_names: Set[str] = field(default_factory=set)
+
+    def has_errors(self) -> bool:
+        return bool(self.errors)
+
+
 def parse_lexer_output(
     lines: List[str],
-    skip_types: Optional[set] = None,
-    ignored_tokens: Optional[set] = None,
+    skip_types: Optional[Set[str]] = None,
+    ignored_tokens: Optional[Set[str]] = None,
 ) -> LexerOutput:
-    """
-    Convierte las líneas de texto producidas por el lexer en una LexerOutput.
-
-    Parámetros
-    ----------
-    lines:
-        Líneas tal como las imprime el lexer generado.
-    skip_types:
-        Nombres de token que se deben ignorar (además de SKIP).
-        Por defecto, sólo se ignora 'SKIP'.
-    ignored_tokens:
-        Conjunto extra de nombres de token a ignorar (viene del IGNORE del .yalp).
-    """
-    if skip_types is None:
-        skip_types = set()
-    all_skip = _SKIP_TYPES | skip_types | (ignored_tokens or set())
+    """Convierte lineas impresas por el lexer en LexerOutput."""
+    all_skip = _SKIP_TYPES | set(skip_types or set()) | set(ignored_tokens or set())
 
     result = LexerOutput()
     for raw_line in lines:
@@ -102,72 +87,87 @@ def parse_lexer_output(
         if not line:
             continue
 
-        m = _TOKEN_RE.match(line)
-        if m:
-            tok_type = m.group("type")
-            if tok_type in all_skip:
+        token_match = _TOKEN_RE.match(line)
+        if token_match:
+            token_type = token_match.group("type")
+            if token_type in all_skip:
                 continue
-            # El lexema viene entre comillas dobles; lo decodificamos
-            raw_lexeme = m.group("lexeme")        # incluye las comillas
-            lexeme = _decode_lexeme(raw_lexeme)
-            tok = Token(
-                type=tok_type,
-                lexeme=lexeme,
-                line=int(m.group("line")),
-                col=int(m.group("col")),
+            result.tokens.append(
+                Token(
+                    type=token_type,
+                    lexeme=_decode_lexeme(token_match.group("lexeme")),
+                    line=int(token_match.group("line")),
+                    col=int(token_match.group("col")),
+                )
             )
-            result.tokens.append(tok)
             continue
 
-        m = _ERROR_RE.match(line)
-        if m:
-            msg = (
-                f"Error léxico en línea {m.group('line')}, "
-                f"columna {m.group('col')}: {m.group('byte')}"
+        error_match = _ERROR_RE.match(line)
+        if error_match:
+            result.errors.append(
+                "Error lexico en linea "
+                f"{error_match.group('line')}, columna {error_match.group('col')}: "
+                f"{error_match.group('byte')}"
             )
-            result.errors.append(msg)
-            continue
-        # Línea desconocida: ignorar silenciosamente (puede ser debug del lexer)
 
     return result
 
 
-def _decode_lexeme(quoted: str) -> str:
-    """Elimina las comillas externas y decodifica secuencias de escape simples."""
-    inner = quoted[1:-1]  # quita " y "
-    return (
-        inner
-        .replace("\\\\", "\x00BACKSLASH\x00")
-        .replace('\\"', '"')
-        .replace("\\n", "\n")
-        .replace("\\r", "\r")
-        .replace("\\t", "\t")
-        .replace("\x00BACKSLASH\x00", "\\")
+def validate_tokens(
+    declared_tokens: Iterable[str],
+    produced_token_names: Optional[Iterable[object]] = None,
+    ignored_tokens: Optional[Iterable[str]] = None,
+) -> TokenConsistencyReport:
+    """
+    Valida consistencia basica entre YAPar y YALex.
+
+    - declared_tokens viene de %token.
+    - ignored_tokens viene de IGNORE.
+    - produced_token_names puede contener strings o instancias Token.
+    """
+    declared = set(declared_tokens)
+    ignored = set(ignored_tokens or set())
+    produced = _normalize_token_names(produced_token_names or [])
+
+    report = TokenConsistencyReport(
+        declared_tokens=declared,
+        ignored_tokens=ignored,
+        produced_token_names=produced,
     )
 
+    unknown_ignored = ignored - declared
+    if unknown_ignored:
+        report.errors.append(
+            "Tokens en IGNORE no declarados con %token: "
+            + ", ".join(sorted(unknown_ignored))
+        )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Ejecución del lexer externo
-# ──────────────────────────────────────────────────────────────────────────────
+    if produced:
+        special = {"$", "EOF", "SKIP"}
+        undeclared = produced - declared - ignored - special
+        if undeclared:
+            report.errors.append(
+                "Tokens producidos por YALex no declarados en YAPar: "
+                + ", ".join(sorted(undeclared))
+            )
+
+        missing_in_lexer = declared - produced - ignored
+        if missing_in_lexer:
+            report.warnings.append(
+                "Tokens declarados en YAPar no observados/producidos por YALex: "
+                + ", ".join(sorted(missing_in_lexer))
+            )
+
+    return report
+
 
 def run_lexer(
     lexer_script: str,
     input_file: str,
     python_executable: str = sys.executable,
+    ignored_tokens: Optional[Set[str]] = None,
 ) -> LexerOutput:
-    """
-    Ejecuta el lexer generado por YALex sobre *input_file* y retorna
-    la lista de tokens.
-
-    Parámetros
-    ----------
-    lexer_script:
-        Ruta al script Python generado por yalexgen (p. ej. 'lexer_generated.py').
-    input_file:
-        Archivo de texto a analizar léxicamente.
-    python_executable:
-        Intérprete Python a usar (por defecto el actual).
-    """
+    """Ejecuta el lexer generado por YALex sobre input_file."""
     try:
         result = subprocess.run(
             [python_executable, lexer_script, input_file],
@@ -177,78 +177,49 @@ def run_lexer(
             errors="replace",
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"No se pudo ejecutar el lexer '{lexer_script}': {exc}"
-        ) from exc
+        raise RuntimeError(f"No se pudo ejecutar el lexer '{lexer_script}': {exc}") from exc
 
-    lines = result.stdout.splitlines()
-    return parse_lexer_output(lines)
+    return parse_lexer_output(result.stdout.splitlines(), ignored_tokens=ignored_tokens)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Stream de tokens (cursor para el parser)
-# ──────────────────────────────────────────────────────────────────────────────
 
 class TokenStream:
-    """
-    Cursor sobre una lista de tokens que el parser puede consumir.
-
-    Siempre termina con EOF_TOKEN para simplificar el manejo del fin de entrada.
-    """
+    """Cursor sobre tokens para el parser predictivo futuro."""
 
     def __init__(self, tokens: List[Token]) -> None:
         self._tokens: List[Token] = list(tokens)
-        # Añade centinela al final si el lexer no lo incluyó
         if not self._tokens or self._tokens[-1].type not in ("$", "EOF"):
             self._tokens.append(EOF_TOKEN)
-        else:
-            # Normaliza EOF del lexer al símbolo $ que usa el parser
+        elif self._tokens[-1].type == "EOF":
             last = self._tokens[-1]
-            if last.type == "EOF":
-                self._tokens[-1] = Token("$", last.lexeme, last.line, last.col)
-        self._pos: int = 0
-
-    # ── Propiedades ─────────────────────────────────────────────────────────
+            self._tokens[-1] = Token("$", last.lexeme, last.line, last.col)
+        self._pos = 0
 
     @property
     def current(self) -> Token:
-        """Token en la posición actual (sin consumirlo)."""
         return self._tokens[self._pos]
 
     @property
     def at_end(self) -> bool:
-        """True si el siguiente token es $ (fin de entrada)."""
         return self.current.type == "$"
 
-    # ── Operaciones ─────────────────────────────────────────────────────────
-
     def peek(self, offset: int = 0) -> Token:
-        """
-        Devuelve el token en *current_pos + offset* sin avanzar.
-        Si se sale del rango, devuelve EOF_TOKEN.
-        """
-        idx = self._pos + offset
-        if idx < len(self._tokens):
-            return self._tokens[idx]
+        index = self._pos + offset
+        if index < len(self._tokens):
+            return self._tokens[index]
         return EOF_TOKEN
 
     def consume(self) -> Token:
-        """Avanza y devuelve el token consumido."""
-        tok = self._tokens[self._pos]
+        token = self._tokens[self._pos]
         if self._pos < len(self._tokens) - 1:
             self._pos += 1
-        return tok
+        return token
 
     def expect(self, token_type: str) -> Token:
-        """
-        Consume el token actual si su tipo coincide con *token_type*.
-        Lanza SyntaxError en caso contrario.
-        """
-        tok = self.current
-        if tok.type != token_type:
+        token = self.current
+        if token.type != token_type:
             raise SyntaxError(
-                f"Se esperaba '{token_type}' pero se encontró '{tok.type}' "
-                f"('{tok.lexeme}') en línea {tok.line}, columna {tok.col}"
+                f"Se esperaba '{token_type}' pero se encontro '{token.type}' "
+                f"('{token.lexeme}') en linea {token.line}, columna {token.col}"
             )
         return self.consume()
 
@@ -257,45 +228,47 @@ class TokenStream:
             yield self.consume()
 
     def __repr__(self) -> str:
-        remaining = self._tokens[self._pos:]
+        remaining = self._tokens[self._pos :]
         return f"TokenStream(pos={self._pos}, remaining={remaining[:5]}...)"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Helper: construye un TokenStream desde cualquier fuente
-# ──────────────────────────────────────────────────────────────────────────────
 
 def token_stream_from_lexer_output(
     output: LexerOutput,
     raise_on_lex_errors: bool = False,
 ) -> TokenStream:
-    """
-    Crea un TokenStream a partir de un LexerOutput.
-
-    Si *raise_on_lex_errors* es True y existen errores léxicos,
-    lanza un ValueError con todos los mensajes de error.
-    """
+    """Crea un TokenStream desde LexerOutput."""
     if raise_on_lex_errors and output.has_errors():
-        msg = "Errores léxicos encontrados:\n" + "\n".join(output.errors)
-        raise ValueError(msg)
+        message = "Errores lexicos encontrados:\n" + "\n".join(output.errors)
+        raise ValueError(message)
     return TokenStream(output.tokens)
 
 
 def token_stream_from_file(
     lexer_script: str,
     input_file: str,
-    ignored_tokens: Optional[set] = None,
+    ignored_tokens: Optional[Set[str]] = None,
     raise_on_lex_errors: bool = False,
 ) -> TokenStream:
-    """
-    Atajo: ejecuta el lexer sobre *input_file* y devuelve el TokenStream listo.
-    """
-    output = run_lexer(lexer_script, input_file)
-    # Re-parsear con los tokens ignorados del .yalp
-    # (run_lexer ya tiene las líneas; en producción integraríamos el ignored_tokens
-    #  directamente en parse_lexer_output)
-    filtered = LexerOutput(
-        tokens=[t for t in output.tokens if t.type not in (ignored_tokens or set())],
-        errors=output.errors,
+    """Ejecuta el lexer y devuelve un TokenStream listo."""
+    output = run_lexer(lexer_script, input_file, ignored_tokens=ignored_tokens)
+    return token_stream_from_lexer_output(output, raise_on_lex_errors)
+
+
+def _decode_lexeme(quoted: str) -> str:
+    inner = quoted[1:-1]
+    return (
+        inner.replace("\\\\", "\x00BACKSLASH\x00")
+        .replace('\\"', '"')
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace("\x00BACKSLASH\x00", "\\")
     )
-    return token_stream_from_lexer_output(filtered, raise_on_lex_errors)
+
+
+def _normalize_token_names(items: Iterable[object]) -> Set[str]:
+    names: Set[str] = set()
+    for item in items:
+        token_type = getattr(item, "type", None)
+        names.add(str(token_type if token_type is not None else item))
+    return names
