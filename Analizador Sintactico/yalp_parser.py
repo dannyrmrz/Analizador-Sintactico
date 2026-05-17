@@ -28,6 +28,41 @@ _TOKEN_LIKE_RE = re.compile(r"^[A-Z_][A-Z_0-9]*$")
 class YalpParseError(Exception):
     """Error durante el parseo o validacion del archivo .yalp/.yapar."""
 
+    def __init__(
+        self,
+        message: str,
+        file: Optional[str] = None,
+        line: Optional[int] = None,
+        column: Optional[int] = None,
+        suggestion: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.file = file
+        self.line = line
+        self.column = column
+        self.suggestion = suggestion
+
+    def __str__(self) -> str:
+        location = ""
+        if self.file:
+            location = self.file
+            if self.line is not None:
+                location += f":{self.line}"
+                if self.column is not None:
+                    location += f":{self.column}"
+            location += ": "
+        elif self.line is not None:
+            location = f"Linea {self.line}"
+            if self.column is not None:
+                location += f", columna {self.column}"
+            location += ": "
+
+        text = f"{location}{self.message}"
+        if self.suggestion:
+            text += f"\nSugerencia: {self.suggestion}"
+        return text
+
 
 @dataclass
 class Production:
@@ -110,30 +145,84 @@ class YalpSpec:
         return "\n".join(lines)
 
 
-def strip_comments(text: str) -> str:
+def strip_comments(text: str, filename: Optional[str] = None) -> str:
     """Elimina comentarios /* ... */; pueden ocupar varias lineas."""
-    return re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    output: List[str] = []
+    i = 0
+    line = 1
+    col = 1
+
+    while i < len(text):
+        if text.startswith("/*", i):
+            start_line, start_col = line, col
+            i += 2
+            col += 2
+            closed = False
+            while i < len(text):
+                if text.startswith("*/", i):
+                    i += 2
+                    col += 2
+                    closed = True
+                    break
+                if text[i] == "\n":
+                    output.append("\n")
+                    i += 1
+                    line += 1
+                    col = 1
+                else:
+                    i += 1
+                    col += 1
+            if not closed:
+                raise YalpParseError(
+                    "Comentario sin cerrar.",
+                    file=filename,
+                    line=start_line,
+                    column=start_col,
+                    suggestion="Cierre el comentario con */.",
+                )
+            continue
+
+        output.append(text[i])
+        if text[i] == "\n":
+            line += 1
+            col = 1
+        else:
+            col += 1
+        i += 1
+
+    return "".join(output)
 
 
-def parse_yalp(source: str) -> YalpSpec:
+def parse_yalp(source: str, filename: Optional[str] = None) -> YalpSpec:
     """
     Parsea el contenido completo de un .yalp/.yapar.
 
     Lanza YalpParseError con mensajes claros si falta el separador %%,
     si hay producciones mal formadas o si aparecen simbolos inconsistentes.
     """
-    clean = strip_comments(source)
+    clean = strip_comments(source, filename=filename)
 
     separator_count = clean.count("%%")
     if separator_count == 0:
-        raise YalpParseError("Falta el separador '%%' entre tokens y producciones.")
+        raise YalpParseError(
+            "Falta el separador '%%' entre tokens y producciones.",
+            file=filename,
+            suggestion="Agregue %% despues de la seccion de %token/IGNORE.",
+        )
     if separator_count > 1:
-        raise YalpParseError("El archivo debe contener un solo separador '%%'.")
+        raise YalpParseError(
+            "El archivo debe contener un solo separador '%%'.",
+            file=filename,
+        )
 
     token_section, production_section = clean.split("%%", 1)
 
-    token_info = parse_token_section(token_section)
-    grammar, non_terminals, productions = parse_production_section(production_section)
+    token_info = parse_token_section(token_section, filename=filename)
+    grammar, non_terminals, productions = parse_production_section(
+        production_section,
+        filename=filename,
+        base_line=token_section.count("\n") + 1,
+    )
     start_symbol = non_terminals[0]
 
     validation = validate_declared_tokens(
@@ -143,7 +232,11 @@ def parse_yalp(source: str) -> YalpSpec:
         non_terminals=non_terminals,
     )
     if validation.has_errors():
-        raise YalpParseError(_format_validation_errors(validation.errors))
+        raise YalpParseError(
+            _format_validation_errors(validation.errors),
+            file=filename,
+            suggestion="Revise que los terminales esten declarados con %token y que los no terminales tengan produccion.",
+        )
 
     warnings = token_info.warnings + validation.warnings
 
@@ -160,7 +253,10 @@ def parse_yalp(source: str) -> YalpSpec:
     )
 
 
-def parse_token_section(token_section: str) -> TokenSection:
+def parse_token_section(
+    token_section: str,
+    filename: Optional[str] = None,
+) -> TokenSection:
     """
     Parsea la seccion previa a %%.
 
@@ -170,6 +266,10 @@ def parse_token_section(token_section: str) -> TokenSection:
       IGNORE WS
       IGNORE WS COMMENT
     """
+    return _parse_token_section(token_section, filename=filename)
+
+
+def _parse_token_section(token_section: str, filename: Optional[str] = None) -> TokenSection:
     result = TokenSection()
     seen: Set[str] = set()
 
@@ -178,13 +278,18 @@ def parse_token_section(token_section: str) -> TokenSection:
         if not line:
             continue
 
-        token_match = re.match(r"^%token\s+(.+)$", line, re.IGNORECASE)
+        token_match = re.match(r"^%token\s+(.+)$", line)
         if token_match:
             names = token_match.group(1).split()
             if not names:
-                raise YalpParseError(f"Linea {line_number}: %token no declara tokens.")
+                raise YalpParseError(
+                    "%token no declara tokens.",
+                    file=filename,
+                    line=line_number,
+                    suggestion="Declare al menos un token despues de %token.",
+                )
             for name in names:
-                _validate_identifier(name, line_number, "token")
+                _validate_token_name(name, line_number, filename, "token")
                 if name in seen:
                     result.warnings.append(f"Token duplicado ignorado: {name}")
                     continue
@@ -192,22 +297,34 @@ def parse_token_section(token_section: str) -> TokenSection:
                 seen.add(name)
             continue
 
-        ignore_match = re.match(r"^IGNORE\s+(.+)$", line, re.IGNORECASE)
+        ignore_match = re.match(r"^IGNORE\s+(.+)$", line)
         if ignore_match:
             names = ignore_match.group(1).split()
             if not names:
-                raise YalpParseError(f"Linea {line_number}: IGNORE no declara tokens.")
+                raise YalpParseError(
+                    "IGNORE no declara tokens.",
+                    file=filename,
+                    line=line_number,
+                    suggestion="Declare al menos un token despues de IGNORE.",
+                )
             for name in names:
-                _validate_identifier(name, line_number, "token ignorado")
+                _validate_token_name(name, line_number, filename, "token ignorado")
                 result.ignored.add(name)
             continue
 
         raise YalpParseError(
-            f"Linea {line_number}: linea inesperada en seccion de tokens: {line!r}"
+            f"Linea inesperada en seccion de tokens: {line!r}",
+            file=filename,
+            line=line_number,
+            suggestion="Use %token TOKEN_NAME o IGNORE TOKEN_NAME antes de %%.",
         )
 
     if not result.tokens:
-        raise YalpParseError("No se declaro ningun token con %token.")
+        raise YalpParseError(
+            "No se declaro ningun token con %token.",
+            file=filename,
+            suggestion="La primera seccion debe declarar tokens con %token.",
+        )
 
     return result
 
@@ -220,11 +337,18 @@ def get_ignored_tokens(spec_or_section: object) -> Set[str]:
 
 def parse_production_section(
     production_section: str,
+    filename: Optional[str] = None,
+    base_line: int = 1,
 ) -> Tuple[Dict[str, List[List[str]]], List[str], List[Production]]:
     """Parsea la seccion posterior a %% y retorna gramatica canonica."""
-    tokens = _tokenize_productions(production_section)
+    tokens = _tokenize_productions(production_section, filename=filename, base_line=base_line)
     if not tokens:
-        raise YalpParseError("La seccion de producciones esta vacia.")
+        raise YalpParseError(
+            "La seccion de producciones esta vacia.",
+            file=filename,
+            line=base_line,
+            suggestion="Declare al menos una produccion despues de %%.",
+        )
 
     grammar: Dict[str, List[List[str]]] = {}
     non_terminals: List[str] = []
@@ -235,13 +359,19 @@ def parse_production_section(
         head = tokens[i]
         if head in {":", "|", ";"}:
             raise YalpParseError(
-                f"Se esperaba un nombre de produccion, se encontro {head!r}."
+                f"Se esperaba un nombre de produccion, se encontro {head!r}.",
+                file=filename,
+                suggestion="Cada produccion debe iniciar con un no terminal.",
             )
-        _validate_identifier(head, None, "no terminal")
+        _validate_identifier(head, None, "no terminal", filename=filename)
         i += 1
 
         if i >= len(tokens) or tokens[i] != ":":
-            raise YalpParseError(f"Se esperaba ':' despues de la produccion '{head}'.")
+            raise YalpParseError(
+                f"Se esperaba ':' despues de la produccion '{head}'.",
+                file=filename,
+                suggestion=f"Escriba '{head}: ... ;'.",
+            )
         i += 1
 
         if head not in grammar:
@@ -267,7 +397,8 @@ def parse_production_section(
 
             if symbol == ":":
                 raise YalpParseError(
-                    f"':' inesperado dentro de la produccion '{head}'."
+                    f"':' inesperado dentro de la produccion '{head}'.",
+                    file=filename,
                 )
 
             normalized = normalize_epsilon(symbol)
@@ -275,26 +406,34 @@ def parse_production_section(
                 if current_alt:
                     raise YalpParseError(
                         f"epsilon debe aparecer solo en una alternativa: "
-                        f"{head} -> {' '.join(current_alt + [symbol])}"
+                        f"{head} -> {' '.join(current_alt + [symbol])}",
+                        file=filename,
                     )
                 current_alt = [EPSILON]
                 continue
 
-            _validate_identifier(normalized, None, "simbolo de produccion")
+            _validate_identifier(normalized, None, "simbolo de produccion", filename=filename)
             if current_alt == [EPSILON]:
                 raise YalpParseError(
                     f"epsilon debe aparecer solo en una alternativa: "
-                    f"{head} -> {' '.join(current_alt + [normalized])}"
+                    f"{head} -> {' '.join(current_alt + [normalized])}",
+                    file=filename,
                 )
             current_alt.append(normalized)
 
         if not closed:
             raise YalpParseError(
-                f"Falta ';' para cerrar la produccion '{head}'."
+                f"Falta ';' para cerrar la produccion '{head}'.",
+                file=filename,
+                suggestion="Termine cada produccion con punto y coma (;).",
             )
 
     if not grammar:
-        raise YalpParseError("La seccion de producciones esta vacia.")
+        raise YalpParseError(
+            "La seccion de producciones esta vacia.",
+            file=filename,
+            line=base_line,
+        )
 
     return grammar, non_terminals, productions
 
@@ -387,8 +526,12 @@ def parse_yalp_file(path: str) -> YalpSpec:
         with open(path, encoding="utf-8") as handle:
             content = handle.read()
     except OSError as exc:
-        raise YalpParseError(f"No se pudo leer el archivo: {exc}") from exc
-    return parse_yalp(content)
+        raise YalpParseError(
+            f"No se pudo leer el archivo: {exc}",
+            file=path,
+            suggestion="Verifique que la ruta exista y tenga permisos de lectura.",
+        ) from exc
+    return parse_yalp(content, filename=path)
 
 
 def _append_production(
@@ -402,9 +545,13 @@ def _append_production(
     productions.append(Production(head, list(normalized_rhs)))
 
 
-def _tokenize_productions(text: str) -> List[str]:
+def _tokenize_productions(
+    text: str,
+    filename: Optional[str] = None,
+    base_line: int = 1,
+) -> List[str]:
     """Tokeniza nombres y separadores ':', '|' y ';'."""
-    text = strip_comments(text)
+    text = strip_comments(text, filename=filename)
     token_re = re.compile(r"[A-Za-z_][A-Za-z_0-9]*|[:|;]|\S")
     result: List[str] = []
 
@@ -417,17 +564,47 @@ def _tokenize_productions(text: str) -> List[str]:
         line, col = _line_col(text, match.start())
         raise YalpParseError(
             f"Simbolo invalido en producciones en linea {line}, columna {col}: "
-            f"{value!r}"
+            f"{value!r}",
+            file=filename,
+            line=base_line + line - 1,
+            column=col,
+            suggestion="Use identificadores, ':', '|', ';' o epsilon.",
         )
 
     return result
 
 
-def _validate_identifier(name: str, line_number: Optional[int], context: str) -> None:
+def _validate_identifier(
+    name: str,
+    line_number: Optional[int],
+    context: str,
+    filename: Optional[str] = None,
+) -> None:
     if _IDENTIFIER_RE.match(name):
         return
-    prefix = f"Linea {line_number}: " if line_number is not None else ""
-    raise YalpParseError(f"{prefix}Nombre invalido para {context}: {name!r}")
+    raise YalpParseError(
+        f"Nombre invalido para {context}: {name!r}",
+        file=filename,
+        line=line_number,
+        suggestion="Use letras, digitos y guion bajo; no inicie con digito.",
+    )
+
+
+def _validate_token_name(
+    name: str,
+    line_number: Optional[int],
+    filename: Optional[str],
+    context: str,
+) -> None:
+    _validate_identifier(name, line_number, context, filename=filename)
+    if _TOKEN_LIKE_RE.match(name):
+        return
+    raise YalpParseError(
+        f"Nombre invalido para {context}: {name!r}. Los tokens deben ir en mayusculas.",
+        file=filename,
+        line=line_number,
+        suggestion="Use nombres como ID, NUMBER, PLUS o TOKEN_NAME.",
+    )
 
 
 def _looks_like_token(symbol: str) -> bool:

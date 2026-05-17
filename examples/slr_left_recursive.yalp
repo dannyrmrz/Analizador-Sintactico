@@ -1,0 +1,11 @@
+/* Not LL(1) because it is left-recursive, but it is accepted by SLR(1). */
+
+%token NUMBER PLUS WS
+IGNORE WS
+
+%%
+
+expr:
+    expr PLUS NUMBER
+  | NUMBER
+;

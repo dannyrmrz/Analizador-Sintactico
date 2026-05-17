@@ -1,0 +1,10 @@
+/* Ambiguous grammar used to demonstrate an SLR(1) conflict. */
+
+%token A
+
+%%
+
+s:
+    s s
+  | A
+;
