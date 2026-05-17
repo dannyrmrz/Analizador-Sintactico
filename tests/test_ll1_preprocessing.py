@@ -9,6 +9,7 @@ SYNTACTIC_DIR = ROOT / "Analizador Sintactico"
 sys.path.insert(0, str(SYNTACTIC_DIR))
 
 from ll1_analyzer import LL1Analyzer
+from token_stream import parse_lexer_output, read_lexer_token_info, validate_tokens
 from yalp_parser import YalpParseError, parse_yalp
 
 
@@ -104,7 +105,36 @@ s:
         with self.assertRaisesRegex(YalpParseError, "Falta ';'"):
             parse_yalp(grammar)
 
+    def test_yalex_token_info_matches_declared_yapar_tokens(self) -> None:
+        yalex_file = ROOT / "Analizador Lexico" / "examples" / "calculator.yal"
+        info = read_lexer_token_info(str(yalex_file))
+
+        self.assertIn("NUMBER", info.token_names)
+        self.assertIn("PLUS", info.token_names)
+        self.assertEqual(info.eof_token, "EOF")
+
+        declared = {
+            "NUMBER",
+            "PLUS",
+            "MINUS",
+            "TIMES",
+            "DIV",
+            "LPAREN",
+            "RPAREN",
+            "WS",
+        }
+        report = validate_tokens(declared, info.produced_token_names, {"WS"})
+        self.assertFalse(report.errors)
+
+    def test_lexer_output_accepts_token_names_with_spaces(self) -> None:
+        output = parse_lexer_output(
+            ['TOKEN MENOR QUE "<" (line 1, col 1)']
+        )
+
+        self.assertEqual(len(output.tokens), 1)
+        self.assertEqual(output.tokens[0].type, "MENOR QUE")
+        self.assertEqual(output.tokens[0].column, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

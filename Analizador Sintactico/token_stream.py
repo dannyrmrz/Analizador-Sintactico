@@ -12,10 +12,12 @@ por YAPar y deja una funcion de validacion para comparar tokens YAPar/YALex.
 """
 from __future__ import annotations
 
+import ast as py_ast
 import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Set
 
 
@@ -28,6 +30,11 @@ class Token:
     line: int
     col: int
 
+    @property
+    def column(self) -> int:
+        """Alias compatible con la nomenclatura line/column."""
+        return self.col
+
     def __repr__(self) -> str:
         return f"Token({self.type!r}, {self.lexeme!r}, line={self.line}, col={self.col})"
 
@@ -36,7 +43,7 @@ EOF_TOKEN = Token(type="$", lexeme="<EOF>", line=-1, col=-1)
 
 _TOKEN_RE = re.compile(
     r"^TOKEN\s+"
-    r"(?P<type>[A-Za-z_][A-Za-z_0-9]*)\s+"
+    r"(?P<type>.+?)\s+"
     r'(?P<lexeme>"(?:[^"\\]|\\.)*")\s+'
     r"\(line\s+(?P<line>\d+),\s*col\s+(?P<col>\d+)\)\s*$"
 )
@@ -46,6 +53,25 @@ _ERROR_RE = re.compile(
 )
 
 _SKIP_TYPES = {"SKIP"}
+_YAPAR_TOKEN_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*$")
+
+
+@dataclass
+class LexerTokenInfo:
+    """Tokens declarados/producidos por una especificacion o lexer YALex."""
+
+    token_names: List[str] = field(default_factory=list)
+    skipped_token_names: Set[str] = field(default_factory=set)
+    eof_token: Optional[str] = None
+    source: str = ""
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def produced_token_names(self) -> Set[str]:
+        names = set(self.token_names)
+        if self.eof_token:
+            names.add(self.eof_token)
+        return names
 
 
 @dataclass
@@ -89,7 +115,7 @@ def parse_lexer_output(
 
         token_match = _TOKEN_RE.match(line)
         if token_match:
-            token_type = token_match.group("type")
+            token_type = token_match.group("type").strip()
             if token_type in all_skip:
                 continue
             result.tokens.append(
@@ -144,6 +170,17 @@ def validate_tokens(
 
     if produced:
         special = {"$", "EOF", "SKIP"}
+        invalid_names = {
+            name
+            for name in produced
+            if name not in special and not _YAPAR_TOKEN_NAME_RE.match(name)
+        }
+        if invalid_names:
+            report.errors.append(
+                "Tokens producidos por YALex no son identificadores validos para YAPar: "
+                + ", ".join(sorted(invalid_names))
+            )
+
         undeclared = produced - declared - ignored - special
         if undeclared:
             report.errors.append(
@@ -159,6 +196,98 @@ def validate_tokens(
             )
 
     return report
+
+
+def read_lexer_token_info(lexer_path: str) -> LexerTokenInfo:
+    """
+    Lee tokens desde una especificacion `.yal/.yalex` o un lexer Python generado.
+
+    Si la ruta termina en `.yal` o `.yalex`, se reutiliza el parser de YALex.
+    En cualquier otro caso se interpreta como lexer generado y se leen las
+    asignaciones `TOKEN_NAMES`, `TOKEN_SKIP`, `EOF_TOKEN` y `EOF_SKIP`.
+    """
+    path = Path(lexer_path)
+    if path.suffix.lower() in {".yal", ".yalex"}:
+        return read_yalex_spec_token_info(str(path))
+    return read_generated_lexer_token_info(str(path))
+
+
+def read_yalex_spec_token_info(yalex_path: str) -> LexerTokenInfo:
+    """Extrae nombres de tokens directamente desde un archivo YALex."""
+    _ensure_yalex_on_path()
+
+    try:
+        from src_py.emit import infer_token_name, is_eof_regex
+        from src_py.util import read_file
+        from src_py.yal_spec import parse_spec, yal_strip_comments
+    except Exception as exc:  # pragma: no cover - depende del layout del repo.
+        raise RuntimeError(f"No se pudo cargar el generador YALex: {exc}") from exc
+
+    try:
+        spec = parse_spec(yal_strip_comments(read_file(yalex_path)))
+    except Exception as exc:
+        raise RuntimeError(f"No se pudieron leer tokens desde YALex '{yalex_path}': {exc}") from exc
+
+    info = LexerTokenInfo(source=yalex_path)
+    for index, rule in enumerate(spec.rules):
+        name, skip = infer_token_name(rule.action, index)
+        if is_eof_regex(rule.regex):
+            if skip:
+                info.skipped_token_names.add(name)
+            else:
+                info.eof_token = name
+            continue
+        if skip:
+            info.skipped_token_names.add(name)
+            continue
+        _append_unique(info.token_names, name)
+
+    info.warnings.extend(_invalid_token_name_warnings(info.produced_token_names))
+    return info
+
+
+def read_generated_lexer_token_info(lexer_path: str) -> LexerTokenInfo:
+    """Extrae nombres de tokens desde el lexer Python emitido por YALex."""
+    try:
+        source = Path(lexer_path).read_text(encoding="utf-8")
+        tree = py_ast.parse(source, filename=lexer_path)
+    except OSError as exc:
+        raise RuntimeError(f"No se pudo leer el lexer generado '{lexer_path}': {exc}") from exc
+    except UnicodeError as exc:
+        raise RuntimeError(
+            f"El lexer generado '{lexer_path}' no se pudo leer como texto UTF-8: {exc}"
+        ) from exc
+    except SyntaxError as exc:
+        raise RuntimeError(f"El lexer generado no es Python valido '{lexer_path}': {exc}") from exc
+
+    assignments = _literal_assignments(tree, {"TOKEN_NAMES", "TOKEN_SKIP", "EOF_TOKEN", "EOF_SKIP"})
+    if "TOKEN_NAMES" not in assignments:
+        raise RuntimeError(
+            f"El archivo '{lexer_path}' no parece ser un lexer generado por YALex "
+            "(falta TOKEN_NAMES)."
+        )
+
+    token_names = list(assignments.get("TOKEN_NAMES") or [])
+    token_skip = list(assignments.get("TOKEN_SKIP") or [0] * len(token_names))
+    eof_token = assignments.get("EOF_TOKEN")
+    eof_skip = bool(assignments.get("EOF_SKIP", False))
+
+    info = LexerTokenInfo(source=lexer_path)
+    for index, name in enumerate(token_names):
+        skip = bool(token_skip[index]) if index < len(token_skip) else False
+        if skip:
+            info.skipped_token_names.add(str(name))
+        else:
+            _append_unique(info.token_names, str(name))
+
+    if eof_token is not None:
+        if eof_skip:
+            info.skipped_token_names.add(str(eof_token))
+        else:
+            info.eof_token = str(eof_token)
+
+    info.warnings.extend(_invalid_token_name_warnings(info.produced_token_names))
+    return info
 
 
 def run_lexer(
@@ -178,6 +307,13 @@ def run_lexer(
         )
     except FileNotFoundError as exc:
         raise RuntimeError(f"No se pudo ejecutar el lexer '{lexer_script}': {exc}") from exc
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            f"El lexer '{lexer_script}' termino con codigo {result.returncode}."
+            + (f" Detalle: {detail}" if detail else "")
+        )
 
     return parse_lexer_output(result.stdout.splitlines(), ignored_tokens=ignored_tokens)
 
@@ -272,3 +408,40 @@ def _normalize_token_names(items: Iterable[object]) -> Set[str]:
         token_type = getattr(item, "type", None)
         names.add(str(token_type if token_type is not None else item))
     return names
+
+
+def _ensure_yalex_on_path() -> None:
+    lex_dir = Path(__file__).resolve().parents[1] / "Analizador Lexico"
+    if str(lex_dir) not in sys.path:
+        sys.path.insert(0, str(lex_dir))
+
+
+def _append_unique(items: List[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def _literal_assignments(tree: py_ast.AST, names: Set[str]) -> dict[str, object]:
+    found: dict[str, object] = {}
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, py_ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, py_ast.Name) and target.id in names:
+                try:
+                    found[target.id] = py_ast.literal_eval(node.value)
+                except Exception:
+                    pass
+    return found
+
+
+def _invalid_token_name_warnings(names: Iterable[str]) -> List[str]:
+    special = {"$", "EOF", "SKIP"}
+    invalid = sorted(
+        name for name in names if name not in special and not _YAPAR_TOKEN_NAME_RE.match(name)
+    )
+    if not invalid:
+        return []
+    return [
+        "Tokens de YALex no compatibles con nombres YAPar: " + ", ".join(invalid)
+    ]

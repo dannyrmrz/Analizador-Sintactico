@@ -1,0 +1,31 @@
+/* Grammar matched with Analizador Lexico/examples/calculator.yal. */
+
+%token NUMBER PLUS MINUS TIMES DIV LPAREN RPAREN WS
+IGNORE WS
+
+%%
+
+expr:
+    term exprp
+;
+
+exprp:
+    PLUS term exprp
+  | MINUS term exprp
+  | epsilon
+;
+
+term:
+    factor termp
+;
+
+termp:
+    TIMES factor termp
+  | DIV factor termp
+  | epsilon
+;
+
+factor:
+    NUMBER
+  | LPAREN expr RPAREN
+;
