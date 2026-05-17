@@ -143,6 +143,7 @@ def validate_tokens(
     declared_tokens: Iterable[str],
     produced_token_names: Optional[Iterable[object]] = None,
     ignored_tokens: Optional[Iterable[str]] = None,
+    warn_missing: bool = True,
 ) -> TokenConsistencyReport:
     """
     Valida consistencia basica entre YAPar y YALex.
@@ -188,8 +189,8 @@ def validate_tokens(
                 + ", ".join(sorted(undeclared))
             )
 
-        missing_in_lexer = declared - produced - ignored
-        if missing_in_lexer:
+        missing_in_lexer = declared - produced
+        if warn_missing and missing_in_lexer:
             report.warnings.append(
                 "Tokens declarados en YAPar no observados/producidos por YALex: "
                 + ", ".join(sorted(missing_in_lexer))

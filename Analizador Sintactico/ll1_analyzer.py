@@ -12,13 +12,15 @@ Calcula:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Iterable, Iterator, List, Sequence, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 try:  # Permite importar como paquete o como script con sys.path.
     from .yalp_parser import EPSILON, END_MARKER, YalpSpec, format_production
+    from .token_stream import EOF_TOKEN, Token, TokenStream
 except ImportError:  # pragma: no cover - ruta usada por el CLI de raiz.
     from yalp_parser import EPSILON, END_MARKER, YalpSpec, format_production
+    from token_stream import EOF_TOKEN, Token, TokenStream
 
 
 @dataclass
@@ -35,6 +37,26 @@ class LL1Conflict:
 
     def new_text(self) -> str:
         return format_production(self.non_terminal, self.new)
+
+
+@dataclass
+class LL1ParseStep:
+    """Un paso del parser predictivo LL(1)."""
+
+    stack: List[str]
+    lookahead: str
+    action: str
+
+
+@dataclass
+class LL1ParseResult:
+    """Resultado de ejecutar el parser LL(1)."""
+
+    accepted: bool
+    steps: List[LL1ParseStep] = field(default_factory=list)
+    error: Optional[str] = None
+    token: Optional[Token] = None
+    expected: Set[str] = field(default_factory=set)
 
 
 class LL1Analyzer:
@@ -59,7 +81,8 @@ class LL1Analyzer:
         self.follow: Dict[str, Set[str]] = self._compute_follow()
         self.conflicts: List[LL1Conflict] = []
         self.table: Dict[str, Dict[str, List[List[str]]]] = self._build_table()
-        self.is_ll1: bool = not self.conflicts
+        self.left_recursive_non_terminals: Set[str] = self.detect_left_recursion()
+        self.is_ll1: bool = not self.conflicts and not self.left_recursive_non_terminals
 
     def _compute_first(self) -> Dict[str, Set[str]]:
         """
@@ -212,6 +235,161 @@ class LL1Analyzer:
             for terminal in sorted(row):
                 yield non_terminal, terminal, row[terminal]
 
+    def detect_left_recursion(self) -> Set[str]:
+        """
+        Detecta recursion izquierda directa o indirecta usando los primeros
+        no terminales alcanzables al inicio de cada produccion.
+        """
+        edges: Dict[str, Set[str]] = {nt: set() for nt in self.non_terminals}
+        for head, productions in self.grammar.items():
+            for production in productions:
+                if production == [EPSILON]:
+                    continue
+                for symbol in production:
+                    if symbol in edges:
+                        edges[head].add(symbol)
+                        if EPSILON in self.first.get(symbol, set()):
+                            continue
+                    break
+
+        recursive: Set[str] = set()
+        for start in self.non_terminals:
+            stack = list(edges[start])
+            seen: Set[str] = set()
+            while stack:
+                current = stack.pop()
+                if current == start:
+                    recursive.add(start)
+                    break
+                if current in seen:
+                    continue
+                seen.add(current)
+                stack.extend(edges.get(current, set()) - seen)
+        return recursive
+
+    def parse(
+        self,
+        tokens: Sequence[Token] | TokenStream,
+        verbose: bool = False,
+    ) -> LL1ParseResult:
+        """
+        Ejecuta el parser predictivo LL(1) usando la tabla generada.
+
+        Si la gramatica tiene conflictos LL(1), se reporta incompatibilidad
+        sin modificar la gramatica. SLR(1) puede probarse por separado.
+        """
+        if self.conflicts:
+            return LL1ParseResult(
+                accepted=False,
+                error="La gramatica no es compatible con LL(1); hay conflictos en la tabla.",
+            )
+        if self.left_recursive_non_terminals:
+            return LL1ParseResult(
+                accepted=False,
+                error=(
+                    "La gramatica tiene recursion izquierda y no es compatible con LL(1): "
+                    + ", ".join(sorted(self.left_recursive_non_terminals))
+                ),
+            )
+
+        stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
+        stack: List[str] = [END_MARKER, self.start_symbol]
+        steps: List[LL1ParseStep] = []
+
+        while stack:
+            top = stack.pop()
+            lookahead = stream.current
+            lookahead_type = _normalize_eof_type(lookahead.type)
+            shown_stack = list(stack) + [top]
+
+            if top == EPSILON:
+                _append_step(steps, verbose, shown_stack, lookahead_type, "epsilon")
+                continue
+
+            if top == END_MARKER:
+                if lookahead_type == END_MARKER:
+                    _append_step(steps, verbose, shown_stack, lookahead_type, "accept")
+                    return LL1ParseResult(accepted=True, steps=steps)
+                return LL1ParseResult(
+                    accepted=False,
+                    steps=steps,
+                    error=_unexpected_token_message(
+                        lookahead,
+                        {END_MARKER},
+                        "EOF esperado",
+                    ),
+                    token=lookahead,
+                    expected={END_MARKER},
+                )
+
+            if self.spec.is_terminal(top):
+                if top == lookahead_type:
+                    stream.consume()
+                    _append_step(
+                        steps,
+                        verbose,
+                        shown_stack,
+                        lookahead_type,
+                        f"match {top}",
+                    )
+                    continue
+                return LL1ParseResult(
+                    accepted=False,
+                    steps=steps,
+                    error=_unexpected_token_message(
+                        lookahead,
+                        {top},
+                        f"Terminal esperado: {top}",
+                    ),
+                    token=lookahead,
+                    expected={top},
+                )
+
+            row = self.table.get(top, {})
+            productions = row.get(lookahead_type)
+            if not productions:
+                expected = set(row)
+                return LL1ParseResult(
+                    accepted=False,
+                    steps=steps,
+                    error=_unexpected_token_message(
+                        lookahead,
+                        expected,
+                        f"No hay produccion para M[{top}, {lookahead_type}]",
+                    ),
+                    token=lookahead,
+                    expected=expected,
+                )
+            if len(productions) > 1:
+                return LL1ParseResult(
+                    accepted=False,
+                    steps=steps,
+                    error=f"Conflicto LL(1) en M[{top}, {lookahead_type}].",
+                    token=lookahead,
+                    expected={lookahead_type},
+                )
+
+            production = productions[0]
+            _append_step(
+                steps,
+                verbose,
+                shown_stack,
+                lookahead_type,
+                format_production(top, production),
+            )
+            for symbol in reversed(production):
+                if symbol != EPSILON:
+                    stack.append(symbol)
+
+        current = stream.current if not stream.at_end else EOF_TOKEN
+        return LL1ParseResult(
+            accepted=False,
+            steps=steps,
+            error=_unexpected_token_message(current, {END_MARKER}, "EOF inesperado"),
+            token=current,
+            expected={END_MARKER},
+        )
+
     def report_first_follow(self) -> str:
         lines = ["FIRST:"]
         for nt in self.non_terminals:
@@ -243,6 +421,12 @@ class LL1Analyzer:
 
     def report_conflicts(self) -> str:
         if not self.conflicts:
+            if self.left_recursive_non_terminals:
+                return (
+                    "La tabla LL(1) no tuvo celdas conflictivas, pero se detecto "
+                    "recursion izquierda en: "
+                    + ", ".join(sorted(self.left_recursive_non_terminals))
+                )
             return "La tabla LL(1) se genero sin conflictos."
 
         lines = [
@@ -263,3 +447,31 @@ class LL1Analyzer:
 
 def format_set(values: Iterable[str]) -> str:
     return ", ".join(sorted(values)) if values else ""
+
+
+def _append_step(
+    steps: List[LL1ParseStep],
+    verbose: bool,
+    stack: List[str],
+    lookahead: str,
+    action: str,
+) -> None:
+    if verbose:
+        steps.append(LL1ParseStep(stack=stack, lookahead=lookahead, action=action))
+
+
+def _normalize_eof_type(token_type: str) -> str:
+    return END_MARKER if token_type in {END_MARKER, "EOF"} else token_type
+
+
+def _unexpected_token_message(token: Token, expected: Set[str], detail: str) -> str:
+    expected_text = ", ".join(sorted(expected)) if expected else "(ninguno)"
+    found = _normalize_eof_type(token.type)
+    if found == END_MARKER:
+        found_text = "EOF"
+    else:
+        found_text = f"{token.type} ({token.lexeme!r})"
+    return (
+        f"{detail}. Se encontro {found_text} en linea {token.line}, "
+        f"columna {token.column}. Esperado: {expected_text}."
+    )

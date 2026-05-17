@@ -106,6 +106,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         declared_tokens=spec.tokens,
                         produced_token_names=lexer_output.tokens,
                         ignored_tokens=spec.ignored,
+                        warn_missing=False,
                     )
         except RuntimeError as exc:
             integration_error = str(exc)

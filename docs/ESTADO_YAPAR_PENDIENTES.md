@@ -5,11 +5,12 @@
 El repositorio esta organizado en dos partes principales:
 
 - `Analizador Lexico/`: generador estilo YALex escrito en Python. Contiene el CLI `yalexgen`/`yalex`, el codigo fuente en `src_py/`, ejemplos, pruebas de catedra y lexers ya generados.
-- `Analizador Sintactico/`: avance de YAPar. Contiene el parser de archivos `.yalp/.yapar`, el preprocesamiento LL(1) y un modulo puente para convertir la salida textual del lexer generado en tokens.
+- `Analizador Sintactico/`: YAPar. Contiene el parser de archivos `.yalp/.yapar`, LL(1), LR(0), SLR(1), base documentada LALR y modulos puente para consumir tokens de YALex.
 - `examples/`: ejemplos minimos de gramaticas YAPar (`simple_parser.yalp` y `calculator_parser.yalp`).
 - `tests/`: pruebas unitarias del preprocesamiento LL(1).
 - `docs/`: documentacion de avance.
 - `yapar_ll1.py`: CLI actual para parsear una gramatica YAPar y mostrar FIRST, FOLLOW y tabla LL(1).
+- `yapar.py` / `yapar`: CLI principal para ejecutar YAPar con `--method ll1|lr0|slr|lalr`.
 
 El proyecto esta implementado en Python. No hay codigo C/C11 en el repo.
 
@@ -36,20 +37,20 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Parser de `IGNORE`: soporta una o varias lineas `IGNORE`.
 - [x] Parser de producciones: soporta `lhs: ... | ... ;` despues de `%%`.
 - [x] Validacion de terminales y no terminales: detecta tokens no declarados, no terminales no definidos, duplicados y tokens ignorados no declarados.
-- [ ] Gramatica aumentada: no existe todavia una estructura `S' -> S` para LR.
+- [x] Gramatica aumentada: `lr0_automaton.py` crea `S' -> S` para LR.
 - [x] FIRST: implementado en `ll1_analyzer.py`.
 - [x] FOLLOW: implementado en `ll1_analyzer.py`.
 - [x] Tabla LL(1): implementada con deteccion de conflictos.
-- [ ] Parser LL(1): falta consumir una secuencia de tokens y aceptar/rechazar entrada.
-- [ ] Items LR(0): no implementado.
-- [ ] Closure: no implementado para LR.
-- [ ] Goto: no implementado para LR.
-- [ ] Coleccion canonica LR(0): no implementada.
-- [ ] Automata LR(0): no implementado.
-- [ ] Tabla SLR(1): no implementada.
-- [ ] Parser SLR(1): no implementado.
-- [ ] LALR: no implementado.
-- [~] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI `yapar_ll1.py` ya acepta `-l/--lexer` para validar tokens YALex/YAPar. Todavia falta generar un parser final y consumir esos tokens con un parser LL(1), SLR(1) o LALR completo.
+- [x] Parser LL(1): `LL1Analyzer.parse(...)` consume `TokenStream`/tokens y acepta o rechaza.
+- [x] Items LR(0): implementados como `LR0Item`.
+- [x] Closure: implementado en `LR0Automaton.closure`.
+- [x] Goto: implementado en `LR0Automaton.goto`.
+- [x] Coleccion canonica LR(0): implementada con BFS.
+- [x] Automata LR(0): implementado y exportable a DOT.
+- [x] Tabla SLR(1): implementada en `SLRParser`.
+- [x] Parser SLR(1): implementado con stack de estados.
+- [~] LALR: existe base documentada en `lalr_parser.py`, pero no esta completo.
+- [x] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI principal puede ejecutar LL(1)/SLR con tokens reales.
 
 ## 4. Faltantes detectados
 
@@ -59,19 +60,19 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Producciones YAPar basicas.
 - [x] FIRST/FOLLOW.
 - [x] Tabla LL(1) y conflictos.
-- [~] Puente de tokens YALex -> YAPar: ya valida tokens con `-l` y puede observar tokens de un lexer generado con `--input`; falta conectarlo a un parser sintactico ejecutable.
-- [ ] Parser LL(1) ejecutable sobre tokens.
-- [ ] Gramatica aumentada para familia LR.
-- [ ] Items LR(0).
-- [ ] `closure` LR(0).
-- [ ] `goto` LR(0).
-- [ ] Coleccion canonica LR(0).
-- [ ] Exportacion/visualizacion de automata LR(0).
-- [ ] Tabla SLR(1).
-- [ ] Parser SLR(1).
-- [ ] LALR.
+- [x] Puente de tokens YALex -> YAPar.
+- [x] Parser LL(1) ejecutable sobre tokens.
+- [x] Gramatica aumentada para familia LR.
+- [x] Items LR(0).
+- [x] `closure` LR(0).
+- [x] `goto` LR(0).
+- [x] Coleccion canonica LR(0).
+- [x] Exportacion/visualizacion de automata LR(0) en DOT.
+- [x] Tabla SLR(1).
+- [x] Parser SLR(1).
+- [~] LALR: base limpia y documentada; falta algoritmo LR(1)+merge.
 - [ ] GUI tipo IDE.
-- [ ] Reportes completos de errores sintacticos con recuperacion.
+- [~] Reportes completos de errores sintacticos: ya incluyen token, linea, columna y esperados; no hay recuperacion avanzada.
 
 ## 5. Plan tecnico de implementacion
 
@@ -79,7 +80,7 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
    - [x] Agregar al CLI YAPar una opcion `-l/--lexer`.
    - [x] Leer tokens desde un `.yal/.yalex` o desde un lexer Python generado.
    - [x] Validar que los tokens usados/declarados por YAPar coincidan con los producidos por YALex.
-   - [~] Reusar `Token`/`TokenStream` para no hardcodear tokens; falta que los parsers sintacticos consuman el stream.
+   - [x] Reusar `Token`/`TokenStream` para no hardcodear tokens.
 
 2. Completar parser de `.yalp`.
    - Mantener el soporte actual de `%token`, `IGNORE`, `%%` y producciones.
@@ -90,21 +91,21 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
    - Ya estan implementados; conviene agregar mas pruebas con epsilon, recursion y conflictos.
 
 4. Terminar LL(1).
-   - Implementar el parser predictivo con pila usando la tabla LL(1).
-   - Consumir tokens reales de `TokenStream`.
-   - Reportar errores sintacticos con token, lexema, linea y columna.
+   - [x] Implementar el parser predictivo con pila usando la tabla LL(1).
+   - [x] Consumir tokens reales de `TokenStream`.
+   - [x] Reportar errores sintacticos con token, lexema, linea y columna.
 
 5. Implementar LR(0).
-   - Crear producciones indexadas y gramatica aumentada.
-   - Implementar items `A -> alpha . beta`.
-   - Implementar `closure`, `goto` y coleccion canonica.
-   - Exportar el automata LR(0) en texto y DOT.
+   - [x] Crear producciones indexadas y gramatica aumentada.
+   - [x] Implementar items `A -> alpha . beta`.
+   - [x] Implementar `closure`, `goto` y coleccion canonica.
+   - [x] Exportar el automata LR(0) en texto y DOT.
 
 6. Construir SLR(1) encima de LR(0) + FOLLOW.
-   - Usar la coleccion LR(0) para acciones shift/reduce.
-   - Usar FOLLOW para ubicar reducciones.
-   - Detectar conflictos shift/reduce y reduce/reduce.
-   - Implementar parser SLR(1).
+   - [x] Usar la coleccion LR(0) para acciones shift/reduce.
+   - [x] Usar FOLLOW para ubicar reducciones.
+   - [x] Detectar conflictos shift/reduce y reduce/reduce.
+   - [x] Implementar parser SLR(1).
 
 7. Preparar LALR si no alcanza tiempo.
    - Reusar la base LR.
@@ -142,7 +143,32 @@ Validar contra un lexer Python generado y observar tokens de una entrada:
 python yapar_ll1.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/lexer_generated.py" --input "Analizador Lexico/examples/input_ok.txt" -o theparser
 ```
 
-Nota: `-o` queda aceptado por compatibilidad con la llamada esperada `yapar parser.yalp -l lexer.yal -o theparser`, pero este avance aun no emite el parser final.
+Nota: `yapar_ll1.py` conserva `-o` como salida informativa. El CLI principal `yapar.py` si puede emitir un runner ejecutable con `-o`.
+
+CLI principal SLR(1) con lexer YALex y entrada:
+
+```bash
+python yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" --input examples/calculator_input_ok.txt --method slr --dot generated/lr0_automaton.dot
+```
+
+Generar un runner de parser y ejecutarlo:
+
+```bash
+python yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" -o generated/theparser.py --method slr
+python generated/theparser.py examples/calculator_input_ok.txt
+```
+
+Probar una gramatica no LL(1) pero SLR(1):
+
+```bash
+python yapar.py examples/slr_left_recursive.yalp -l examples/number_plus.yal --input examples/number_plus_input_ok.txt --method slr
+```
+
+Probar conflicto SLR(1):
+
+```bash
+python yapar.py examples/slr_conflict.yalp --method slr
+```
 
 Pruebas unitarias actuales:
 

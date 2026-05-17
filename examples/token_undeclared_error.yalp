@@ -1,0 +1,9 @@
+/* TOKEN B is used but not declared with %token. */
+
+%token A
+
+%%
+
+s:
+    A B
+;
