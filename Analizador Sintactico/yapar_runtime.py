@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 try:
-    from .lalr_parser import lalr_status
+    from .lalr_parser import LALRParser
     from .ll1_analyzer import LL1Analyzer
     from .lr0_automaton import LR0Automaton
     from .slr_parser import SLRParser
@@ -26,7 +26,7 @@ try:
     )
     from .yalp_parser import YalpParseError, parse_yalp_file
 except ImportError:  # pragma: no cover
-    from lalr_parser import lalr_status
+    from lalr_parser import LALRParser
     from ll1_analyzer import LL1Analyzer
     from lr0_automaton import LR0Automaton
     from slr_parser import SLRParser
@@ -54,6 +54,7 @@ def run_yapar(
     dot_file: Optional[str] = None,
     json_file: Optional[str] = None,
     verbose: bool = False,
+    recover: bool = False,
 ) -> RuntimeResult:
     try:
         spec = parse_yalp_file(grammar_file)
@@ -115,9 +116,15 @@ def run_yapar(
         if input_file:
             if lexer_output is None:
                 return RuntimeResult(False, "Para parsear entrada con LL(1) se requiere -l y --input.")
-            result = analyzer.parse(token_stream_from_lexer_output(lexer_output), verbose=verbose)
+            result = analyzer.parse(
+                token_stream_from_lexer_output(lexer_output),
+                verbose=verbose,
+                recover=recover,
+            )
             lines.extend(_format_ll1_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
+            for error in getattr(result, "errors", []):
+                lines.append("Recovered error: " + error)
             if result.error:
                 lines.append("Error: " + result.error)
             return RuntimeResult(result.accepted, "\n".join(lines))
@@ -167,19 +174,63 @@ def run_yapar(
         if input_file:
             if lexer_output is None:
                 return RuntimeResult(False, "Para parsear entrada con SLR(1) se requiere -l y --input.")
-            result = parser.parse(token_stream_from_lexer_output(lexer_output), verbose=verbose)
+            result = parser.parse(
+                token_stream_from_lexer_output(lexer_output),
+                verbose=verbose,
+                recover=recover,
+            )
             lines.extend(_format_slr_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
+            for error in getattr(result, "errors", []):
+                lines.append("Recovered error: " + error)
             if result.error:
                 lines.append("Error: " + result.error)
             return RuntimeResult(result.accepted, "\n".join(lines))
         return RuntimeResult(True, "\n".join(lines))
 
     if method == "lalr":
-        status = lalr_status()
-        lines.append(status.summary)
-        lines.extend("- " + item for item in status.pending)
-        return RuntimeResult(False, "\n".join(lines))
+        parser = LALRParser(spec)
+        if dot_file:
+            parser.write_dot(dot_file)
+            lines.append(f"LALR DOT: {dot_file}")
+        if json_file:
+            Path(json_file).write_text(
+                json.dumps(
+                    {
+                        "lalr": parser.to_dict(),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            lines.append(f"LALR JSON: {json_file}")
+        if parser.conflicts:
+            lines.append("La gramatica no es LALR(1).")
+            lines.extend(
+                "Conflict: " + conflict.text(parser.productions)
+                for conflict in parser.conflicts
+            )
+            return RuntimeResult(False, "\n".join(lines))
+        lines.append(f"Canonical LR(1) states: {len(parser.lr1_states)}")
+        lines.append(f"LALR states: {len(parser.states)}")
+        lines.append("LALR table: OK")
+        if input_file:
+            if lexer_output is None:
+                return RuntimeResult(False, "Para parsear entrada con LALR(1) se requiere -l y --input.")
+            result = parser.parse(
+                token_stream_from_lexer_output(lexer_output),
+                verbose=verbose,
+                recover=recover,
+            )
+            lines.extend(_format_lalr_steps(result.steps))
+            lines.append("Accepted" if result.accepted else "Rejected")
+            for error in result.errors:
+                lines.append("Recovered error: " + error)
+            if result.error:
+                lines.append("Error: " + result.error)
+            return RuntimeResult(result.accepted, "\n".join(lines))
+        return RuntimeResult(True, "\n".join(lines))
 
     return RuntimeResult(False, f"Metodo desconocido: {method}")
 
@@ -268,5 +319,14 @@ def _format_slr_steps(steps: object) -> list[str]:
     for step in steps:
         lines.append(
             f"SLR step stack={step.stack} lookahead={step.lookahead} action={step.action}"
+        )
+    return lines
+
+
+def _format_lalr_steps(steps: object) -> list[str]:
+    lines: list[str] = []
+    for step in steps:
+        lines.append(
+            f"LALR step stack={step.stack} lookahead={step.lookahead} action={step.action}"
         )
     return lines

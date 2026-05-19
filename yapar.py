@@ -18,7 +18,7 @@ from yapar_runtime import emit_parser_runner, run_yapar  # noqa: E402
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="yapar",
-        description="Generador/ejecutor YAPar con LL(1), LR(0) y SLR(1).",
+        description="Generador/ejecutor YAPar con LL(1), LR(0), SLR(1) y LALR(1).",
     )
     parser.add_argument("grammar_file", help="Archivo .yalp/.yapar")
     parser.add_argument("-l", "--lexer", dest="lexer_file", help="Archivo .yal/.yalex o lexer Python generado")
@@ -33,6 +33,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--dot", dest="dot_file", help="Ruta para exportar el automata LR(0) DOT")
     parser.add_argument("--json", dest="json_file", help="Ruta para exportar estructuras JSON")
     parser.add_argument("--verbose", action="store_true", help="Muestra pasos del parser")
+    parser.add_argument(
+        "--recover",
+        action="store_true",
+        help="Activa recuperacion panic-mode para reportar mas de un error sintactico",
+    )
     args = parser.parse_args(argv)
 
     if args.out_parser and not args.lexer_file:
@@ -56,6 +61,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         dot_file=args.dot_file,
         json_file=args.json_file,
         verbose=args.verbose,
+        recover=args.recover,
     )
     print(result.message)
     return 0 if result.ok else 1

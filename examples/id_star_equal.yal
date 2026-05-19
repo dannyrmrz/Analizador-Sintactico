@@ -1,0 +1,17 @@
+{
+}
+
+let letter = ['a'-'z' 'A'-'Z' '_']
+let digit = ['0'-'9']
+let idchar = letter | digit
+let ws = [' ' '\t' '\n' '\r']+
+
+rule tokens =
+    ws { return lexbuf; }
+  | letter idchar* { return ID; }
+  | '*' { return STAR; }
+  | '=' { return EQUAL; }
+  | eof { return EOF; }
+
+{
+}

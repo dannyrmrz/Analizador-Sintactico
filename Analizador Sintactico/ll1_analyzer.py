@@ -57,6 +57,8 @@ class LL1ParseResult:
     error: Optional[str] = None
     token: Optional[Token] = None
     expected: Set[str] = field(default_factory=set)
+    errors: List[str] = field(default_factory=list)
+    recovered: bool = False
 
 
 class LL1Analyzer:
@@ -271,6 +273,7 @@ class LL1Analyzer:
         self,
         tokens: Sequence[Token] | TokenStream,
         verbose: bool = False,
+        recover: bool = False,
     ) -> LL1ParseResult:
         """
         Ejecuta el parser predictivo LL(1) usando la tabla generada.
@@ -295,6 +298,8 @@ class LL1Analyzer:
         stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
         stack: List[str] = [END_MARKER, self.start_symbol]
         steps: List[LL1ParseStep] = []
+        errors: List[str] = []
+        recovered = False
 
         while stack:
             top = stack.pop()
@@ -309,18 +314,30 @@ class LL1Analyzer:
             if top == END_MARKER:
                 if lookahead_type == END_MARKER:
                     _append_step(steps, verbose, shown_stack, lookahead_type, "accept")
-                    return LL1ParseResult(accepted=True, steps=steps)
-                return LL1ParseResult(
-                    accepted=False,
-                    steps=steps,
-                    error=_unexpected_token_message(
+                    return LL1ParseResult(
+                        accepted=not errors,
+                        steps=steps,
+                        error=errors[0] if errors else None,
+                        errors=errors,
+                        recovered=recovered,
+                    )
+                message = _unexpected_token_message(
                         lookahead,
                         {END_MARKER},
                         "EOF esperado",
-                    ),
-                    token=lookahead,
-                    expected={END_MARKER},
                 )
+                if not recover:
+                    return LL1ParseResult(
+                        accepted=False,
+                        steps=steps,
+                        error=message,
+                        token=lookahead,
+                        expected={END_MARKER},
+                    )
+                errors.append(message)
+                recovered = True
+                _recover_ll1_end_marker(stream, stack)
+                continue
 
             if self.spec.is_terminal(top):
                 if top == lookahead_type:
@@ -333,33 +350,45 @@ class LL1Analyzer:
                         f"match {top}",
                     )
                     continue
-                return LL1ParseResult(
-                    accepted=False,
-                    steps=steps,
-                    error=_unexpected_token_message(
+                message = _unexpected_token_message(
                         lookahead,
                         {top},
                         f"Terminal esperado: {top}",
-                    ),
-                    token=lookahead,
-                    expected={top},
                 )
+                if not recover:
+                    return LL1ParseResult(
+                        accepted=False,
+                        steps=steps,
+                        error=message,
+                        token=lookahead,
+                        expected={top},
+                    )
+                errors.append(message)
+                recovered = True
+                _recover_ll1_terminal(top, stream, stack)
+                continue
 
             row = self.table.get(top, {})
             productions = row.get(lookahead_type)
             if not productions:
                 expected = set(row)
-                return LL1ParseResult(
-                    accepted=False,
-                    steps=steps,
-                    error=_unexpected_token_message(
+                message = _unexpected_token_message(
                         lookahead,
                         expected,
                         f"No hay produccion para M[{top}, {lookahead_type}]",
-                    ),
-                    token=lookahead,
-                    expected=expected,
                 )
+                if not recover:
+                    return LL1ParseResult(
+                        accepted=False,
+                        steps=steps,
+                        error=message,
+                        token=lookahead,
+                        expected=expected,
+                    )
+                errors.append(message)
+                recovered = True
+                _recover_ll1_non_terminal(top, row, self.follow, stream, stack)
+                continue
             if len(productions) > 1:
                 return LL1ParseResult(
                     accepted=False,
@@ -388,6 +417,8 @@ class LL1Analyzer:
             error=_unexpected_token_message(current, {END_MARKER}, "EOF inesperado"),
             token=current,
             expected={END_MARKER},
+            errors=errors,
+            recovered=recovered,
         )
 
     def report_first_follow(self) -> str:
@@ -475,3 +506,37 @@ def _unexpected_token_message(token: Token, expected: Set[str], detail: str) -> 
         f"{detail}. Se encontro {found_text} en linea {token.line}, "
         f"columna {token.column}. Esperado: {expected_text}."
     )
+
+
+def _recover_ll1_terminal(expected: str, stream: TokenStream, stack: List[str]) -> None:
+    """Descarta un token inesperado o inserta implicitamente el terminal faltante."""
+    if _normalize_eof_type(stream.current.type) == END_MARKER:
+        return
+    stream.consume()
+    stack.append(expected)
+
+
+def _recover_ll1_non_terminal(
+    non_terminal: str,
+    row: Dict[str, List[List[str]]],
+    follow: Dict[str, Set[str]],
+    stream: TokenStream,
+    stack: List[str],
+) -> None:
+    """Recuperacion panic-mode para no terminales usando FIRST/FOLLOW."""
+    expected = set(row)
+    sync = expected | set(follow.get(non_terminal, set())) | {END_MARKER}
+
+    while _normalize_eof_type(stream.current.type) not in sync:
+        stream.consume()
+
+    lookahead_type = _normalize_eof_type(stream.current.type)
+    if lookahead_type in expected:
+        stack.append(non_terminal)
+
+
+def _recover_ll1_end_marker(stream: TokenStream, stack: List[str]) -> None:
+    """Descarta tokens extra hasta EOF y reintenta aceptar."""
+    while _normalize_eof_type(stream.current.type) != END_MARKER:
+        stream.consume()
+    stack.append(END_MARKER)

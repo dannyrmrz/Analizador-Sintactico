@@ -32,10 +32,11 @@ El CLI acepta:
 - `--method ll1`: tabla y parser LL(1).
 - `--method lr0`: construye y exporta automata LR(0).
 - `--method slr`: tabla y parser SLR(1).
-- `--method lalr`: muestra estado pendiente de LALR.
+- `--method lalr`: tabla y parser LALR(1).
 - `--dot ruta.dot`: exporta automata LR(0).
 - `--json ruta.json`: exporta estructuras para una interfaz.
 - `--verbose`: muestra pasos del parser cuando se analiza una entrada.
+- `--recover`: activa recuperacion panic-mode para reportar errores sintacticos adicionales.
 
 ## Generar runner de parser
 
@@ -80,6 +81,47 @@ Conflicto SLR(1):
 python yapar.py examples/slr_conflict.yalp --method slr
 ```
 
+## Probar LALR(1)
+
+Gramatica LR(1)/LALR(1) que no es SLR(1):
+
+```bash
+python3 yapar.py examples/lalr_not_slr.yalp --method slr
+python3 yapar.py examples/lalr_not_slr.yalp -l examples/id_star_equal.yal --input examples/lalr_assignment_input_ok.txt --method lalr
+```
+
+Exportar la tabla/automata LALR:
+
+```bash
+python3 yapar.py examples/lalr_not_slr.yalp --method lalr --dot generated/lalr.dot --json generated/lalr.json
+```
+
+## Recuperacion de errores
+
+```bash
+python3 yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" --input examples/calculator_input_error.txt --method slr --recover
+```
+
+## GUI tipo IDE
+
+```bash
+python3 yapar_ide.py
+```
+
+La GUI permite editar la gramatica, seleccionar lexer e input, ejecutar `ll1`, `lr0`, `slr` o `lalr`, activar `verbose`/`recover` y guardar salidas DOT/JSON.
+
+## Frontend web
+
+Desde la raiz del repo:
+
+```bash
+python3 yapar_web.py
+```
+
+Luego abra la URL que imprime la terminal, por ejemplo `http://127.0.0.1:5174`.
+
+El frontend web permite cargar ejemplos, editar gramatica YAPar, lexer YALex e input, ejecutar `LL(1)`, `LR(0)`, `SLR` o `LALR`, ver resumen, tablas, automata, pasos del parser, consola y exportar JSON/DOT desde la misma pantalla.
+
 Token usado pero no declarado:
 
 ```bash
@@ -89,7 +131,7 @@ python yapar.py examples/token_undeclared_error.yalp --method slr
 ## Pruebas
 
 ```bash
-python -m unittest tests/test_ll1_preprocessing.py tests/test_yapar_algorithms.py
+python3 -m unittest tests/test_ll1_preprocessing.py tests/test_yapar_algorithms.py
 ```
 
 ## Que funciona
@@ -109,13 +151,16 @@ python -m unittest tests/test_ll1_preprocessing.py tests/test_yapar_algorithms.p
 - Tabla ACTION/GOTO SLR(1).
 - Parser SLR(1) con shift/reduce/goto/accept.
 - Deteccion de conflictos shift/reduce y reduce/reduce.
-- JSON de estructuras para futura interfaz.
+- Coleccion canonica LR(1), fusion de cores LR(0), tabla ACTION/GOTO y parser LALR(1).
+- Deteccion de conflictos LALR shift/reduce y reduce/reduce.
+- Recuperacion panic-mode opcional para LL(1), SLR(1) y LALR(1).
+- GUI tipo IDE en `yapar_ide.py`.
+- JSON de estructuras para interfaz.
 
-## Que no funciona todavia
+## Pendientes conocidos
 
-- LALR(1) completo. Existe base en `lalr_parser.py`, pero falta LR(1), fusion de cores y tabla LALR.
-- Interfaz grafica tipo IDE. El CLI exporta JSON/DOT para conectarla despues.
-- Recuperacion avanzada de errores sintacticos. Hoy se reporta el error con linea, columna, token actual y esperados.
+- No hay generacion de arbol AST semantico; el parser reporta aceptacion/rechazo y pasos.
+- La recuperacion `--recover` es panic-mode: descarta tokens/estados para continuar, no reescribe la entrada ni garantiza multiples errores en todos los casos.
 
 ## Archivos principales tocados
 
@@ -127,6 +172,7 @@ python -m unittest tests/test_ll1_preprocessing.py tests/test_yapar_algorithms.p
 - `Analizador Sintactico/lalr_parser.py`
 - `Analizador Sintactico/yapar_runtime.py`
 - `yapar.py`
+- `yapar_ide.py`
 - `yapar`
 - `yapar_ll1.py`
 - `examples/`

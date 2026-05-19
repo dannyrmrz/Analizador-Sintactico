@@ -49,8 +49,8 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Automata LR(0): implementado y exportable a DOT.
 - [x] Tabla SLR(1): implementada en `SLRParser`.
 - [x] Parser SLR(1): implementado con stack de estados.
-- [~] LALR: existe base documentada en `lalr_parser.py`, pero no esta completo.
-- [x] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI principal puede ejecutar LL(1)/SLR con tokens reales.
+- [x] LALR: `lalr_parser.py` construye coleccion LR(1), fusiona cores LR(0), genera ACTION/GOTO y ejecuta parser LALR(1).
+- [x] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI principal puede ejecutar LL(1)/SLR/LALR con tokens reales.
 
 ## 4. Faltantes detectados
 
@@ -70,9 +70,9 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Exportacion/visualizacion de automata LR(0) en DOT.
 - [x] Tabla SLR(1).
 - [x] Parser SLR(1).
-- [~] LALR: base limpia y documentada; falta algoritmo LR(1)+merge.
-- [ ] GUI tipo IDE.
-- [~] Reportes completos de errores sintacticos: ya incluyen token, linea, columna y esperados; no hay recuperacion avanzada.
+- [x] LALR: algoritmo LR(1)+merge implementado y conectado al CLI.
+- [x] GUI tipo IDE: `yapar_ide.py` permite editar gramaticas, seleccionar lexer/input, ejecutar metodos y exportar DOT/JSON.
+- [x] Reportes completos de errores sintacticos: incluyen token, lexema, linea, columna, esperados y modo `--recover` con recuperacion panic-mode.
 
 ## 5. Plan tecnico de implementacion
 
@@ -107,11 +107,14 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
    - [x] Detectar conflictos shift/reduce y reduce/reduce.
    - [x] Implementar parser SLR(1).
 
-7. Preparar LALR si no alcanza tiempo.
-   - Reusar la base LR.
-   - Definir estructura para items LR(1) con lookahead.
-   - Fusionar estados con mismo core LR(0).
-   - Documentar si queda como pendiente tecnico.
+7. Completar LALR.
+   - [x] Reusar la base LR.
+   - [x] Definir estructura para items LR(1) con lookahead.
+   - [x] Construir closure/goto y coleccion canonica LR(1).
+   - [x] Fusionar estados con mismo core LR(0).
+   - [x] Combinar lookaheads al fusionar estados.
+   - [x] Construir ACTION/GOTO LALR y detectar conflictos.
+   - [x] Conectar el parser LALR al TokenStream de YALex.
 
 8. Agregar pruebas.
    - Pruebas de parser `.yalp`.
@@ -170,10 +173,29 @@ Probar conflicto SLR(1):
 python yapar.py examples/slr_conflict.yalp --method slr
 ```
 
+Probar una gramatica LR(1)/LALR(1) que no es SLR(1):
+
+```bash
+python3 yapar.py examples/lalr_not_slr.yalp --method slr
+python3 yapar.py examples/lalr_not_slr.yalp -l examples/id_star_equal.yal --input examples/lalr_assignment_input_ok.txt --method lalr
+```
+
+Activar recuperacion panic-mode para errores sintacticos:
+
+```bash
+python3 yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" --input examples/calculator_input_error.txt --method slr --recover
+```
+
+Abrir la GUI tipo IDE:
+
+```bash
+python3 yapar_ide.py
+```
+
 Pruebas unitarias actuales:
 
 ```bash
-python -m unittest tests/test_ll1_preprocessing.py
+python3 -m unittest tests/test_ll1_preprocessing.py tests/test_yapar_algorithms.py
 ```
 
 Desde `Analizador Lexico/`, generar y ejecutar el lexer de calculadora:

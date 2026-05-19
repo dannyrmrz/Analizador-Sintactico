@@ -1,0 +1,20 @@
+/* Classic LR(1)/LALR(1) grammar that is not SLR(1). */
+
+%token ID STAR EQUAL WS
+IGNORE WS
+
+%%
+
+s:
+    l EQUAL r
+  | r
+;
+
+l:
+    STAR r
+  | ID
+;
+
+r:
+    l
+;

@@ -73,6 +73,8 @@ class SLRParseResult:
     error: Optional[str] = None
     token: Optional[Token] = None
     expected: Set[str] = field(default_factory=set)
+    errors: List[str] = field(default_factory=list)
+    recovered: bool = False
 
 
 @dataclass
@@ -102,6 +104,7 @@ class SLRParser:
         self,
         tokens: Sequence[Token] | TokenStream,
         verbose: bool = False,
+        recover: bool = False,
     ) -> SLRParseResult:
         if self.conflicts:
             return SLRParseResult(
@@ -112,6 +115,8 @@ class SLRParser:
         stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
         stack: List[int] = [0]
         steps: List[SLRParseStep] = []
+        errors: List[str] = []
+        recovered = False
 
         while True:
             state = stack[-1]
@@ -121,17 +126,32 @@ class SLRParser:
 
             if action is None:
                 expected = set(self.action.get(state, {}))
-                return SLRParseResult(
-                    accepted=False,
-                    steps=steps,
-                    error=_unexpected_token_message(
+                message = _unexpected_token_message(
                         lookahead,
                         expected,
                         f"No existe accion para ACTION[{state}, {lookahead_type}]",
-                    ),
-                    token=lookahead,
-                    expected=expected,
                 )
+                if not recover:
+                    return SLRParseResult(
+                        accepted=False,
+                        steps=steps,
+                        error=message,
+                        token=lookahead,
+                        expected=expected,
+                    )
+                errors.append(message)
+                recovered = True
+                if not _recover_lr_stack_and_stream(stack, stream, self.action):
+                    return SLRParseResult(
+                        accepted=False,
+                        steps=steps,
+                        error=message,
+                        token=lookahead,
+                        expected=expected,
+                        errors=errors,
+                        recovered=recovered,
+                    )
+                continue
 
             _append_step(steps, verbose, list(stack), lookahead_type, action.text(self.automaton.productions))
 
@@ -146,35 +166,50 @@ class SLRParser:
                 production = self.automaton.productions[action.production_index]
                 for _ in production.rhs:
                     if len(stack) == 1:
+                        message = f"Stack invalido al reducir {production.text()}."
                         return SLRParseResult(
                             accepted=False,
                             steps=steps,
-                            error=f"Stack invalido al reducir {production.text()}.",
+                            error=message,
                             token=lookahead,
+                            errors=errors + [message] if recover else errors,
+                            recovered=recovered,
                         )
                     stack.pop()
                 goto_state = self.goto_table.get(stack[-1], {}).get(production.lhs)
                 if goto_state is None:
+                    message = (
+                        f"No existe GOTO[{stack[-1]}, {production.lhs}] "
+                        f"despues de reducir {production.text()}."
+                    )
                     return SLRParseResult(
                         accepted=False,
                         steps=steps,
-                        error=(
-                            f"No existe GOTO[{stack[-1]}, {production.lhs}] "
-                            f"despues de reducir {production.text()}."
-                        ),
+                        error=message,
                         token=lookahead,
+                        errors=errors + [message] if recover else errors,
+                        recovered=recovered,
                     )
                 stack.append(goto_state)
                 continue
 
             if action.kind == "accept":
-                return SLRParseResult(accepted=True, steps=steps)
+                return SLRParseResult(
+                    accepted=not errors,
+                    steps=steps,
+                    error=errors[0] if errors else None,
+                    errors=errors,
+                    recovered=recovered,
+                )
 
+            message = f"Accion SLR desconocida: {action.kind}"
             return SLRParseResult(
                 accepted=False,
                 steps=steps,
-                error=f"Accion SLR desconocida: {action.kind}",
+                error=message,
                 token=lookahead,
+                errors=errors + [message] if recover else errors,
+                recovered=recovered,
             )
 
     def action_entries(self) -> List[Tuple[int, str, SLRAction]]:
@@ -286,3 +321,23 @@ def _unexpected_token_message(token: Token, expected: Set[str], detail: str) -> 
         f"{detail}. Se encontro {found_text} en linea {token.line}, "
         f"columna {token.column}. Esperado: {expected_text}."
     )
+
+
+def _recover_lr_stack_and_stream(
+    stack: List[int],
+    stream: TokenStream,
+    action: Dict[int, Dict[str, SLRAction]],
+) -> bool:
+    """Recuperacion panic-mode: descarta tokens o estados hasta hallar accion."""
+    while True:
+        state = stack[-1]
+        lookahead_type = _normalize_eof_type(stream.current.type)
+        if action.get(state, {}).get(lookahead_type) is not None:
+            return True
+        if lookahead_type != END_MARKER:
+            stream.consume()
+            continue
+        if len(stack) > 1:
+            stack.pop()
+            continue
+        return False

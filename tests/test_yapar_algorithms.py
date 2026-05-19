@@ -9,6 +9,7 @@ SYNTACTIC_DIR = ROOT / "Analizador Sintactico"
 sys.path.insert(0, str(SYNTACTIC_DIR))
 
 from ll1_analyzer import LL1Analyzer
+from lalr_parser import LALRParser
 from lr0_automaton import LR0Automaton
 from slr_parser import SLRParser
 from token_stream import Token
@@ -50,6 +51,23 @@ s:
 """
 
 
+LALR_NOT_SLR = """
+%token ID STAR EQUAL
+%%
+s:
+    l EQUAL r
+  | r
+;
+l:
+    STAR r
+  | ID
+;
+r:
+    l
+;
+"""
+
+
 class YaparAlgorithmTests(unittest.TestCase):
     def test_ll1_parser_accepts_token_stream(self) -> None:
         spec = parse_yalp(LL1_GRAMMAR)
@@ -78,6 +96,22 @@ class YaparAlgorithmTests(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertIn("Se encontro PLUS", result.error or "")
         self.assertIn("NUMBER", result.error or "")
+
+    def test_ll1_recovery_continues_after_extra_token(self) -> None:
+        spec = parse_yalp(LL1_GRAMMAR)
+        analyzer = LL1Analyzer(spec)
+        tokens = [
+            Token("NUMBER", "1", 1, 1),
+            Token("PLUS", "+", 1, 3),
+            Token("PLUS", "+", 1, 5),
+            Token("NUMBER", "2", 1, 7),
+        ]
+
+        result = analyzer.parse(tokens, recover=True)
+
+        self.assertFalse(result.accepted)
+        self.assertTrue(result.recovered)
+        self.assertGreaterEqual(len(result.errors), 1)
 
     def test_lr0_automaton_builds_augmented_start_and_dot(self) -> None:
         spec = parse_yalp(LL1_GRAMMAR)
@@ -110,6 +144,50 @@ class YaparAlgorithmTests(unittest.TestCase):
         self.assertFalse(parser.is_slr1)
         self.assertTrue(parser.conflicts)
         self.assertIn("conflict", parser.conflicts[0].conflict_type)
+
+    def test_lalr_accepts_lr1_grammar_that_slr_rejects(self) -> None:
+        spec = parse_yalp(LALR_NOT_SLR)
+        slr = SLRParser(spec)
+        lalr = LALRParser(spec)
+        tokens = [
+            Token("ID", "x", 1, 1),
+            Token("EQUAL", "=", 1, 3),
+            Token("ID", "y", 1, 5),
+        ]
+
+        self.assertFalse(slr.is_slr1)
+        self.assertTrue(lalr.is_lalr1, [c.text(lalr.productions) for c in lalr.conflicts])
+        self.assertTrue(lalr.parse(tokens).accepted)
+
+    def test_lalr_reports_syntax_error_with_expected_tokens(self) -> None:
+        spec = parse_yalp(LALR_NOT_SLR)
+        parser = LALRParser(spec)
+        tokens = [
+            Token("STAR", "*", 1, 1),
+            Token("EQUAL", "=", 1, 3),
+        ]
+
+        result = parser.parse(tokens)
+
+        self.assertFalse(result.accepted)
+        self.assertIn("Se encontro EQUAL", result.error or "")
+        self.assertTrue(result.expected)
+
+    def test_lalr_recovery_reports_and_keeps_parsing(self) -> None:
+        spec = parse_yalp(LALR_NOT_SLR)
+        parser = LALRParser(spec)
+        tokens = [
+            Token("ID", "x", 1, 1),
+            Token("EQUAL", "=", 1, 3),
+            Token("EQUAL", "=", 1, 5),
+            Token("ID", "y", 1, 7),
+        ]
+
+        result = parser.parse(tokens, recover=True)
+
+        self.assertFalse(result.accepted)
+        self.assertTrue(result.recovered)
+        self.assertGreaterEqual(len(result.errors), 1)
 
 
 if __name__ == "__main__":

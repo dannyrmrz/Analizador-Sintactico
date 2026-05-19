@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YAPar Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">Y</span>
+          <div>
+            <h1>YAPar Studio</h1>
+            <p>Analizador sintactico visual</p>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <label class="field compact-field">
+            <span>Ejemplo</span>
+            <select id="exampleSelect" aria-label="Seleccionar ejemplo">
+              <option value="">Cargando ejemplos...</option>
+            </select>
+          </label>
+          <button class="button secondary" id="loadExampleButton" type="button" title="Cargar ejemplo">
+            Cargar
+          </button>
+          <button class="button primary" id="runButton" type="button" title="Ejecutar analisis">
+            Ejecutar
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-panel">
+          <section class="control-section">
+            <h2>Metodo</h2>
+            <div class="segmented" role="radiogroup" aria-label="Metodo de analisis">
+              <label><input type="radio" name="method" value="ll1" /> <span>LL(1)</span></label>
+              <label><input type="radio" name="method" value="lr0" /> <span>LR(0)</span></label>
+              <label><input type="radio" name="method" value="slr" checked /> <span>SLR</span></label>
+              <label><input type="radio" name="method" value="lalr" /> <span>LALR</span></label>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <h2>Opciones</h2>
+            <label class="switch-row">
+              <input id="verboseToggle" type="checkbox" checked />
+              <span>Mostrar pasos</span>
+            </label>
+            <label class="switch-row">
+              <input id="recoverToggle" type="checkbox" />
+              <span>Recuperacion panic-mode</span>
+            </label>
+          </section>
+
+          <section class="control-section">
+            <h2>Estado</h2>
+            <div class="status-stack">
+              <div class="status-pill idle" id="statusPill">Listo</div>
+              <div class="metric-grid">
+                <div><strong id="tokenCount">0</strong><span>Tokens</span></div>
+                <div><strong id="stateCount">0</strong><span>Estados</span></div>
+                <div><strong id="stepCount">0</strong><span>Pasos</span></div>
+                <div><strong id="issueCount">0</strong><span>Avisos</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <h2>Artefactos</h2>
+            <div class="button-stack">
+              <button class="button secondary full" id="exportJsonButton" type="button" disabled>
+                Exportar JSON
+              </button>
+              <button class="button secondary full" id="exportDotButton" type="button" disabled>
+                Exportar DOT
+              </button>
+            </div>
+          </section>
+
+          <section class="control-section fill">
+            <h2>Problemas</h2>
+            <div class="problem-list" id="problemList">
+              <p class="muted">Sin ejecuciones todavia.</p>
+            </div>
+          </section>
+        </aside>
+
+        <section class="editor-zone" aria-label="Editores">
+          <div class="editor-panel grammar-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Gramatica YAPar</h2>
+                <span id="grammarPath">Sin archivo cargado</span>
+              </div>
+              <button class="text-button" id="clearGrammarButton" type="button">Limpiar</button>
+            </div>
+            <textarea id="grammarEditor" spellcheck="false"></textarea>
+          </div>
+
+          <div class="editor-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Lexer YALex</h2>
+                <span id="lexerPath">Opcional para construir tablas; requerido para parsear input</span>
+              </div>
+              <button class="text-button" id="clearLexerButton" type="button">Limpiar</button>
+            </div>
+            <textarea id="lexerEditor" spellcheck="false"></textarea>
+          </div>
+
+          <div class="editor-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Entrada</h2>
+                <span id="inputPath">Texto a tokenizar y parsear</span>
+              </div>
+              <button class="text-button" id="clearInputButton" type="button">Limpiar</button>
+            </div>
+            <textarea id="inputEditor" spellcheck="false"></textarea>
+          </div>
+        </section>
+
+        <section class="results-panel" aria-label="Resultados">
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="summary" type="button">Resumen</button>
+            <button class="tab" data-tab="tables" type="button">Tablas</button>
+            <button class="tab" data-tab="automaton" type="button">Automata</button>
+            <button class="tab" data-tab="steps" type="button">Pasos</button>
+            <button class="tab" data-tab="console" type="button">Consola</button>
+          </div>
+
+          <div class="tab-content active" id="summaryTab"></div>
+          <div class="tab-content" id="tablesTab"></div>
+          <div class="tab-content" id="automatonTab"></div>
+          <div class="tab-content" id="stepsTab"></div>
+          <div class="tab-content" id="consoleTab"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
