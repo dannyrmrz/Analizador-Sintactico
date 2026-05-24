@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -13,6 +14,7 @@ SYNTACTIC_DIR = ROOT / "Analizador Sintactico"
 if str(SYNTACTIC_DIR) not in sys.path:
     sys.path.insert(0, str(SYNTACTIC_DIR))
 
+from semantic_tree import SemanticNode  # noqa: E402
 from yapar_runtime import run_yapar  # noqa: E402
 
 
@@ -34,6 +36,7 @@ class YaparIDE(tk.Tk):
         self.verbose = tk.BooleanVar(value=False)
         self.recover = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Listo")
+        self.current_tree: Optional[SemanticNode] = None
 
         self._build_ui()
         default_grammar = ROOT / "examples" / "calculator_parser.yalp"
@@ -85,18 +88,28 @@ class YaparIDE(tk.Tk):
         output_frame.rowconfigure(1, weight=1)
         output_frame.columnconfigure(0, weight=1)
         ttk.Label(output_frame, text="Salida").grid(row=0, column=0, sticky="w")
-        self.output = tk.Text(
-            output_frame,
-            wrap="word",
-            font=("Menlo", 12),
-            borderwidth=1,
-            relief="solid",
-            state="disabled",
-        )
-        self.output.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
-        output_scroll = ttk.Scrollbar(output_frame, orient="vertical", command=self.output.yview)
-        output_scroll.grid(row=1, column=1, sticky="ns", pady=(6, 0))
-        self.output.configure(yscrollcommand=output_scroll.set)
+        output_tabs = ttk.Notebook(output_frame)
+        output_tabs.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        self.output = self._text_tab(output_tabs, "Reporte", wrap="word")
+        self.tree_text = self._text_tab(output_tabs, "Arbol texto")
+        self.tree_json_text = self._text_tab(output_tabs, "Arbol JSON")
+        self.tree_dot_text = self._text_tab(output_tabs, "Arbol DOT")
+
+        tree_frame = ttk.Frame(output_tabs)
+        tree_frame.rowconfigure(0, weight=1)
+        tree_frame.columnconfigure(0, weight=1)
+        self.tree_view = ttk.Treeview(tree_frame, columns=("lexeme", "pos"), show="tree headings")
+        self.tree_view.heading("#0", text="Simbolo")
+        self.tree_view.heading("lexeme", text="Lexema")
+        self.tree_view.heading("pos", text="Linea:Col")
+        self.tree_view.column("#0", width=240)
+        self.tree_view.column("lexeme", width=150)
+        self.tree_view.column("pos", width=80)
+        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree_view.yview)
+        self.tree_view.configure(yscrollcommand=tree_scroll.set)
+        self.tree_view.grid(row=0, column=0, sticky="nsew")
+        tree_scroll.grid(row=0, column=1, sticky="ns")
+        output_tabs.add(tree_frame, text="Arbol visual")
         body.add(output_frame, weight=1)
 
         options = ttk.Frame(self, padding=(10, 8))
@@ -125,6 +138,12 @@ class YaparIDE(tk.Tk):
         )
         ttk.Button(options, text="Limpiar salida", command=lambda: self._set_output("")).grid(
             row=3, column=4, sticky="w"
+        )
+        ttk.Button(options, text="Exportar arbol JSON", command=self._export_tree_json).grid(
+            row=1, column=5, sticky="w", padx=(10, 0)
+        )
+        ttk.Button(options, text="Exportar arbol DOT", command=self._export_tree_dot).grid(
+            row=2, column=5, sticky="w", padx=(10, 0)
         )
 
         status_bar = ttk.Label(self, textvariable=self.status, anchor="w", padding=(10, 5))
@@ -246,18 +265,102 @@ class YaparIDE(tk.Tk):
             method=self.method.get(),
             dot_file=_none_if_blank(self.dot_path.get()),
             json_file=_none_if_blank(self.json_path.get()),
+            show_tree=True,
             verbose=self.verbose.get(),
             recover=self.recover.get(),
         )
         self._set_output(result.message)
+        self._set_tree(result.tree if result.ok else None)
         self.status.set("OK" if result.ok else "Revisar salida")
 
+    def _text_tab(self, notebook: ttk.Notebook, title: str, wrap: str = "none") -> tk.Text:
+        frame = ttk.Frame(notebook)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        text = tk.Text(
+            frame,
+            wrap=wrap,
+            font=("Menlo", 12),
+            borderwidth=1,
+            relief="solid",
+            state="disabled",
+        )
+        yscroll = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        xscroll = ttk.Scrollbar(frame, orient="horizontal", command=text.xview)
+        text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        text.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        notebook.add(frame, text=title)
+        return text
+
     def _set_output(self, text: str) -> None:
-        self.output.configure(state="normal")
-        self.output.delete("1.0", tk.END)
+        self._set_text(self.output, text)
+
+    def _set_text(self, widget: tk.Text, text: str) -> None:
+        widget.configure(state="normal")
+        widget.delete("1.0", tk.END)
         if text:
-            self.output.insert("1.0", text)
-        self.output.configure(state="disabled")
+            widget.insert("1.0", text)
+        widget.configure(state="disabled")
+
+    def _set_tree(self, tree: Optional[SemanticNode]) -> None:
+        self.current_tree = tree
+        self._set_text(self.tree_text, tree.pretty() if tree else "")
+        self._set_text(
+            self.tree_json_text,
+            json.dumps(tree.to_dict(), indent=2, ensure_ascii=False) if tree else "",
+        )
+        self._set_text(self.tree_dot_text, tree.to_dot() if tree else "")
+        self._clear_tree_view()
+        if tree:
+            self._insert_tree_node(tree)
+
+    def _clear_tree_view(self) -> None:
+        for item in self.tree_view.get_children():
+            self.tree_view.delete(item)
+
+    def _insert_tree_node(self, node: SemanticNode, parent: str = "") -> None:
+        pos = ""
+        if node.line is not None and node.column is not None:
+            pos = f"{node.line}:{node.column}"
+        item = self.tree_view.insert(
+            parent,
+            "end",
+            text=node.symbol,
+            values=(node.lexeme or "", pos),
+            open=True,
+        )
+        for child in node.children:
+            self._insert_tree_node(child, item)
+
+    def _export_tree_json(self) -> None:
+        if self.current_tree is None:
+            messagebox.showinfo("YAPar IDE", "No hay arbol aceptado para exportar.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Guardar arbol JSON",
+            defaultextension=".json",
+            filetypes=(("JSON", "*.json"), ("Todos", "*.*")),
+        )
+        if path:
+            Path(path).write_text(
+                json.dumps(self.current_tree.to_dict(), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+                newline="\n",
+            )
+
+    def _export_tree_dot(self) -> None:
+        if self.current_tree is None:
+            messagebox.showinfo("YAPar IDE", "No hay arbol aceptado para exportar.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Guardar arbol DOT",
+            defaultextension=".dot",
+            filetypes=(("DOT", "*.dot"), ("Todos", "*.*")),
+        )
+        if path:
+            Path(path).write_text(self.current_tree.to_dot(), encoding="utf-8", newline="\n")
 
 
 def _none_if_blank(value: str) -> Optional[str]:

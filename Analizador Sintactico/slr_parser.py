@@ -11,11 +11,13 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 try:
     from .ll1_analyzer import LL1Analyzer
     from .lr0_automaton import LR0Automaton, LRProduction
+    from .semantic_tree import SemanticNode
     from .token_stream import EOF_TOKEN, Token, TokenStream
     from .yalp_parser import END_MARKER, YalpSpec
 except ImportError:  # pragma: no cover
     from ll1_analyzer import LL1Analyzer
     from lr0_automaton import LR0Automaton, LRProduction
+    from semantic_tree import SemanticNode
     from token_stream import EOF_TOKEN, Token, TokenStream
     from yalp_parser import END_MARKER, YalpSpec
 
@@ -70,6 +72,7 @@ class SLRParseResult:
 
     accepted: bool
     steps: List[SLRParseStep] = field(default_factory=list)
+    tree: Optional[SemanticNode] = None
     error: Optional[str] = None
     token: Optional[Token] = None
     expected: Set[str] = field(default_factory=set)
@@ -114,6 +117,7 @@ class SLRParser:
 
         stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
         stack: List[int] = [0]
+        node_stack: List[SemanticNode] = []
         steps: List[SLRParseStep] = []
         errors: List[str] = []
         recovered = False
@@ -135,6 +139,7 @@ class SLRParser:
                     return SLRParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=node_stack[-1] if node_stack else None,
                         error=message,
                         token=lookahead,
                         expected=expected,
@@ -145,6 +150,7 @@ class SLRParser:
                     return SLRParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=node_stack[-1] if node_stack else None,
                         error=message,
                         token=lookahead,
                         expected=expected,
@@ -158,24 +164,41 @@ class SLRParser:
             if action.kind == "shift":
                 assert action.target is not None
                 stack.append(action.target)
+                node_stack.append(SemanticNode.terminal(lookahead))
                 stream.consume()
                 continue
 
             if action.kind == "reduce":
                 assert action.production_index is not None
                 production = self.automaton.productions[action.production_index]
+                child_count = len(production.rhs)
+                if child_count > len(node_stack):
+                    message = f"Stack semantico invalido al reducir {production.text()}."
+                    return SLRParseResult(
+                        accepted=False,
+                        steps=steps,
+                        tree=node_stack[-1] if node_stack else None,
+                        error=message,
+                        token=lookahead,
+                        errors=errors + [message] if recover else errors,
+                        recovered=recovered,
+                    )
+                children = node_stack[-child_count:] if child_count else [SemanticNode.epsilon()]
                 for _ in production.rhs:
                     if len(stack) == 1:
                         message = f"Stack invalido al reducir {production.text()}."
                         return SLRParseResult(
                             accepted=False,
                             steps=steps,
+                            tree=node_stack[-1] if node_stack else None,
                             error=message,
                             token=lookahead,
                             errors=errors + [message] if recover else errors,
                             recovered=recovered,
                         )
                     stack.pop()
+                if child_count:
+                    del node_stack[-child_count:]
                 goto_state = self.goto_table.get(stack[-1], {}).get(production.lhs)
                 if goto_state is None:
                     message = (
@@ -185,11 +208,13 @@ class SLRParser:
                     return SLRParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=node_stack[-1] if node_stack else None,
                         error=message,
                         token=lookahead,
                         errors=errors + [message] if recover else errors,
                         recovered=recovered,
                     )
+                node_stack.append(SemanticNode(production.lhs, children=list(children)))
                 stack.append(goto_state)
                 continue
 
@@ -197,6 +222,7 @@ class SLRParser:
                 return SLRParseResult(
                     accepted=not errors,
                     steps=steps,
+                    tree=node_stack[-1] if node_stack else None,
                     error=errors[0] if errors else None,
                     errors=errors,
                     recovered=recovered,
@@ -206,6 +232,7 @@ class SLRParser:
             return SLRParseResult(
                 accepted=False,
                 steps=steps,
+                tree=node_stack[-1] if node_stack else None,
                 error=message,
                 token=lookahead,
                 errors=errors + [message] if recover else errors,

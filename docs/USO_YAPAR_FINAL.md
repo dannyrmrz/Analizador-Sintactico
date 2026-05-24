@@ -35,6 +35,9 @@ El CLI acepta:
 - `--method lalr`: tabla y parser LALR(1).
 - `--dot ruta.dot`: exporta automata LR(0).
 - `--json ruta.json`: exporta estructuras para una interfaz.
+- `--tree`: muestra el arbol semantico cuando la entrada es aceptada.
+- `--tree-json archivo.json`: exporta el arbol semantico en JSON.
+- `--tree-dot archivo.dot`: exporta el arbol semantico en DOT.
 - `--verbose`: muestra pasos del parser cuando se analiza una entrada.
 - `--recover`: activa recuperacion panic-mode para reportar errores sintacticos adicionales.
 
@@ -102,13 +105,19 @@ python3 yapar.py examples/lalr_not_slr.yalp --method lalr --dot generated/lalr.d
 python3 yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" --input examples/calculator_input_error.txt --method slr --recover
 ```
 
+## Arbol semantico
+
+```bash
+python3 yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" --input examples/calculator_input_ok.txt --method slr --tree --tree-json generated/semantic_tree.json --tree-dot generated/semantic_tree.dot
+```
+
 ## GUI tipo IDE
 
 ```bash
 python3 yapar_ide.py
 ```
 
-La GUI permite editar la gramatica, seleccionar lexer e input, ejecutar `ll1`, `lr0`, `slr` o `lalr`, activar `verbose`/`recover` y guardar salidas DOT/JSON.
+La GUI permite editar la gramatica, seleccionar lexer e input, ejecutar `ll1`, `lr0`, `slr` o `lalr`, activar `verbose`/`recover`, guardar salidas DOT/JSON y visualizar/exportar el arbol semantico.
 
 ## Frontend web
 

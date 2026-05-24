@@ -51,6 +51,7 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Parser SLR(1): implementado con stack de estados.
 - [x] LALR: `lalr_parser.py` construye coleccion LR(1), fusiona cores LR(0), genera ACTION/GOTO y ejecuta parser LALR(1).
 - [x] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI principal puede ejecutar LL(1)/SLR/LALR con tokens reales.
+- [x] Arbol semantico: LL(1), SLR(1) y LALR(1) construyen `SemanticNode`; el CLI y la GUI lo muestran/exportan en texto, JSON y DOT.
 
 ## 4. Faltantes detectados
 
@@ -71,7 +72,7 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Tabla SLR(1).
 - [x] Parser SLR(1).
 - [x] LALR: algoritmo LR(1)+merge implementado y conectado al CLI.
-- [x] GUI tipo IDE: `yapar_ide.py` permite editar gramaticas, seleccionar lexer/input, ejecutar metodos y exportar DOT/JSON.
+- [x] GUI tipo IDE: `yapar_ide.py` permite editar gramaticas, seleccionar lexer/input, ejecutar metodos, exportar DOT/JSON y visualizar/exportar el arbol semantico.
 - [x] Reportes completos de errores sintacticos: incluyen token, lexema, linea, columna, esperados y modo `--recover` con recuperacion panic-mode.
 
 ## 5. Plan tecnico de implementacion

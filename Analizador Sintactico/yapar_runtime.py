@@ -16,6 +16,7 @@ try:
     from .lalr_parser import LALRParser
     from .ll1_analyzer import LL1Analyzer
     from .lr0_automaton import LR0Automaton
+    from .semantic_tree import SemanticNode, write_tree_dot, write_tree_json
     from .slr_parser import SLRParser
     from .token_stream import (
         LexerOutput,
@@ -29,6 +30,7 @@ except ImportError:  # pragma: no cover
     from lalr_parser import LALRParser
     from ll1_analyzer import LL1Analyzer
     from lr0_automaton import LR0Automaton
+    from semantic_tree import SemanticNode, write_tree_dot, write_tree_json
     from slr_parser import SLRParser
     from token_stream import (
         LexerOutput,
@@ -44,6 +46,8 @@ except ImportError:  # pragma: no cover
 class RuntimeResult:
     ok: bool
     message: str
+    tree: Optional[SemanticNode] = None
+    method: str = ""
 
 
 def run_yapar(
@@ -53,13 +57,16 @@ def run_yapar(
     method: str = "slr",
     dot_file: Optional[str] = None,
     json_file: Optional[str] = None,
+    tree_dot_file: Optional[str] = None,
+    tree_json_file: Optional[str] = None,
+    show_tree: bool = False,
     verbose: bool = False,
     recover: bool = False,
 ) -> RuntimeResult:
     try:
         spec = parse_yalp_file(grammar_file)
     except YalpParseError as exc:
-        return RuntimeResult(False, str(exc))
+        return RuntimeResult(False, str(exc), method=method)
 
     lines = [
         "=== YAPar ===",
@@ -80,24 +87,24 @@ def run_yapar(
                 spec.ignored,
             )
         except RuntimeError as exc:
-            return RuntimeResult(False, str(exc))
+            return RuntimeResult(False, str(exc), method=method)
 
         lines.append("Lexer tokens: " + ", ".join(sorted(lexer_info.produced_token_names)))
         for warning in report.warnings:
             lines.append("Warning: " + warning)
         if report.errors:
             lines.extend("Error: " + error for error in report.errors)
-            return RuntimeResult(False, "\n".join(lines))
+            return RuntimeResult(False, "\n".join(lines), method=method)
 
         if input_file:
             try:
                 lexer_script = ensure_lexer_script(lexer_file)
                 lexer_output = run_lexer(lexer_script, input_file, ignored_tokens=spec.ignored)
             except RuntimeError as exc:
-                return RuntimeResult(False, str(exc))
+                return RuntimeResult(False, str(exc), method=method)
             if lexer_output.errors:
                 lines.extend("Lexical error: " + error for error in lexer_output.errors)
-                return RuntimeResult(False, "\n".join(lines))
+                return RuntimeResult(False, "\n".join(lines), method=method)
             observed_report = validate_tokens(
                 spec.tokens,
                 lexer_output.tokens,
@@ -108,14 +115,14 @@ def run_yapar(
                 lines.append("Warning: " + warning)
             if observed_report.errors:
                 lines.extend("Error: " + error for error in observed_report.errors)
-                return RuntimeResult(False, "\n".join(lines))
+                return RuntimeResult(False, "\n".join(lines), method=method)
 
     if method == "ll1":
         analyzer = LL1Analyzer(spec)
         lines.append(analyzer.report_conflicts())
         if input_file:
             if lexer_output is None:
-                return RuntimeResult(False, "Para parsear entrada con LL(1) se requiere -l y --input.")
+                return RuntimeResult(False, "Para parsear entrada con LL(1) se requiere -l y --input.", method=method)
             result = analyzer.parse(
                 token_stream_from_lexer_output(lexer_output),
                 verbose=verbose,
@@ -123,12 +130,20 @@ def run_yapar(
             )
             lines.extend(_format_ll1_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
+            _append_tree_outputs(
+                lines,
+                result.tree,
+                accepted=result.accepted,
+                tree_dot_file=tree_dot_file,
+                tree_json_file=tree_json_file,
+                show_tree=show_tree,
+            )
             for error in getattr(result, "errors", []):
                 lines.append("Recovered error: " + error)
             if result.error:
                 lines.append("Error: " + result.error)
-            return RuntimeResult(result.accepted, "\n".join(lines))
-        return RuntimeResult(analyzer.is_ll1, "\n".join(lines))
+            return RuntimeResult(result.accepted, "\n".join(lines), tree=result.tree, method=method)
+        return RuntimeResult(analyzer.is_ll1, "\n".join(lines), method=method)
 
     if method == "lr0":
         automaton = LR0Automaton.build(spec)
@@ -142,7 +157,7 @@ def run_yapar(
             )
             lines.append(f"LR(0) JSON: {json_file}")
         lines.append(f"LR(0) states: {len(automaton.states)}")
-        return RuntimeResult(True, "\n".join(lines))
+        return RuntimeResult(True, "\n".join(lines), method=method)
 
     if method == "slr":
         parser = SLRParser(spec)
@@ -168,12 +183,12 @@ def run_yapar(
                 "Conflict: " + conflict.text(parser.automaton.productions)
                 for conflict in parser.conflicts
             )
-            return RuntimeResult(False, "\n".join(lines))
+            return RuntimeResult(False, "\n".join(lines), method=method)
         lines.append(f"SLR states: {len(parser.automaton.states)}")
         lines.append("SLR table: OK")
         if input_file:
             if lexer_output is None:
-                return RuntimeResult(False, "Para parsear entrada con SLR(1) se requiere -l y --input.")
+                return RuntimeResult(False, "Para parsear entrada con SLR(1) se requiere -l y --input.", method=method)
             result = parser.parse(
                 token_stream_from_lexer_output(lexer_output),
                 verbose=verbose,
@@ -181,12 +196,20 @@ def run_yapar(
             )
             lines.extend(_format_slr_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
+            _append_tree_outputs(
+                lines,
+                result.tree,
+                accepted=result.accepted,
+                tree_dot_file=tree_dot_file,
+                tree_json_file=tree_json_file,
+                show_tree=show_tree,
+            )
             for error in getattr(result, "errors", []):
                 lines.append("Recovered error: " + error)
             if result.error:
                 lines.append("Error: " + result.error)
-            return RuntimeResult(result.accepted, "\n".join(lines))
-        return RuntimeResult(True, "\n".join(lines))
+            return RuntimeResult(result.accepted, "\n".join(lines), tree=result.tree, method=method)
+        return RuntimeResult(True, "\n".join(lines), method=method)
 
     if method == "lalr":
         parser = LALRParser(spec)
@@ -211,13 +234,13 @@ def run_yapar(
                 "Conflict: " + conflict.text(parser.productions)
                 for conflict in parser.conflicts
             )
-            return RuntimeResult(False, "\n".join(lines))
+            return RuntimeResult(False, "\n".join(lines), method=method)
         lines.append(f"Canonical LR(1) states: {len(parser.lr1_states)}")
         lines.append(f"LALR states: {len(parser.states)}")
         lines.append("LALR table: OK")
         if input_file:
             if lexer_output is None:
-                return RuntimeResult(False, "Para parsear entrada con LALR(1) se requiere -l y --input.")
+                return RuntimeResult(False, "Para parsear entrada con LALR(1) se requiere -l y --input.", method=method)
             result = parser.parse(
                 token_stream_from_lexer_output(lexer_output),
                 verbose=verbose,
@@ -225,14 +248,22 @@ def run_yapar(
             )
             lines.extend(_format_lalr_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
+            _append_tree_outputs(
+                lines,
+                result.tree,
+                accepted=result.accepted,
+                tree_dot_file=tree_dot_file,
+                tree_json_file=tree_json_file,
+                show_tree=show_tree,
+            )
             for error in result.errors:
                 lines.append("Recovered error: " + error)
             if result.error:
                 lines.append("Error: " + result.error)
-            return RuntimeResult(result.accepted, "\n".join(lines))
-        return RuntimeResult(True, "\n".join(lines))
+            return RuntimeResult(result.accepted, "\n".join(lines), tree=result.tree, method=method)
+        return RuntimeResult(True, "\n".join(lines), method=method)
 
-    return RuntimeResult(False, f"Metodo desconocido: {method}")
+    return RuntimeResult(False, f"Metodo desconocido: {method}", method=method)
 
 
 def ensure_lexer_script(lexer_file: str) -> str:
@@ -298,6 +329,7 @@ result = run_yapar(
     lexer_file={str(Path(lexer_file).resolve())!r},
     input_file=sys.argv[1],
     method={method!r},
+    show_tree="--tree" in sys.argv[2:],
 )
 print(result.message)
 raise SystemExit(0 if result.ok else 1)
@@ -330,3 +362,27 @@ def _format_lalr_steps(steps: object) -> list[str]:
             f"LALR step stack={step.stack} lookahead={step.lookahead} action={step.action}"
         )
     return lines
+
+
+def _append_tree_outputs(
+    lines: list[str],
+    tree: Optional[SemanticNode],
+    accepted: bool,
+    tree_dot_file: Optional[str],
+    tree_json_file: Optional[str],
+    show_tree: bool,
+) -> None:
+    if not accepted or tree is None:
+        if tree_dot_file or tree_json_file or show_tree:
+            lines.append("Semantic tree: unavailable because parsing was not accepted.")
+        return
+
+    if tree_dot_file:
+        write_tree_dot(tree, tree_dot_file)
+        lines.append(f"Semantic tree DOT: {tree_dot_file}")
+    if tree_json_file:
+        write_tree_json(tree, tree_json_file)
+        lines.append(f"Semantic tree JSON: {tree_json_file}")
+    if show_tree:
+        lines.append("Semantic tree:")
+        lines.append(tree.pretty())

@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 try:  # Permite importar como paquete o como script con sys.path.
+    from .semantic_tree import SemanticNode
     from .yalp_parser import EPSILON, END_MARKER, YalpSpec, format_production
     from .token_stream import EOF_TOKEN, Token, TokenStream
 except ImportError:  # pragma: no cover - ruta usada por el CLI de raiz.
+    from semantic_tree import SemanticNode
     from yalp_parser import EPSILON, END_MARKER, YalpSpec, format_production
     from token_stream import EOF_TOKEN, Token, TokenStream
 
@@ -54,6 +56,7 @@ class LL1ParseResult:
 
     accepted: bool
     steps: List[LL1ParseStep] = field(default_factory=list)
+    tree: Optional[SemanticNode] = None
     error: Optional[str] = None
     token: Optional[Token] = None
     expected: Set[str] = field(default_factory=set)
@@ -296,16 +299,20 @@ class LL1Analyzer:
             )
 
         stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
-        stack: List[str] = [END_MARKER, self.start_symbol]
+        root = SemanticNode(self.start_symbol)
+        stack: List[Tuple[str, Optional[SemanticNode]]] = [
+            (END_MARKER, None),
+            (self.start_symbol, root),
+        ]
         steps: List[LL1ParseStep] = []
         errors: List[str] = []
         recovered = False
 
         while stack:
-            top = stack.pop()
+            top, node = stack.pop()
             lookahead = stream.current
             lookahead_type = _normalize_eof_type(lookahead.type)
-            shown_stack = list(stack) + [top]
+            shown_stack = [symbol for symbol, _ in stack] + [top]
 
             if top == EPSILON:
                 _append_step(steps, verbose, shown_stack, lookahead_type, "epsilon")
@@ -317,6 +324,7 @@ class LL1Analyzer:
                     return LL1ParseResult(
                         accepted=not errors,
                         steps=steps,
+                        tree=root,
                         error=errors[0] if errors else None,
                         errors=errors,
                         recovered=recovered,
@@ -330,6 +338,7 @@ class LL1Analyzer:
                     return LL1ParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=root,
                         error=message,
                         token=lookahead,
                         expected={END_MARKER},
@@ -341,6 +350,10 @@ class LL1Analyzer:
 
             if self.spec.is_terminal(top):
                 if top == lookahead_type:
+                    if node is not None:
+                        node.lexeme = lookahead.lexeme
+                        node.line = None if lookahead.line < 0 else lookahead.line
+                        node.column = None if lookahead.col < 0 else lookahead.col
                     stream.consume()
                     _append_step(
                         steps,
@@ -359,13 +372,14 @@ class LL1Analyzer:
                     return LL1ParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=root,
                         error=message,
                         token=lookahead,
                         expected={top},
                     )
                 errors.append(message)
                 recovered = True
-                _recover_ll1_terminal(top, stream, stack)
+                _recover_ll1_terminal(top, stream, stack, node)
                 continue
 
             row = self.table.get(top, {})
@@ -381,18 +395,20 @@ class LL1Analyzer:
                     return LL1ParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=root,
                         error=message,
                         token=lookahead,
                         expected=expected,
                     )
                 errors.append(message)
                 recovered = True
-                _recover_ll1_non_terminal(top, row, self.follow, stream, stack)
+                _recover_ll1_non_terminal(top, row, self.follow, stream, stack, node)
                 continue
             if len(productions) > 1:
                 return LL1ParseResult(
                     accepted=False,
                     steps=steps,
+                    tree=root,
                     error=f"Conflicto LL(1) en M[{top}, {lookahead_type}].",
                     token=lookahead,
                     expected={lookahead_type},
@@ -406,14 +422,22 @@ class LL1Analyzer:
                 lookahead_type,
                 format_production(top, production),
             )
-            for symbol in reversed(production):
+            child_nodes: List[SemanticNode] = []
+            if production == [EPSILON]:
+                child_nodes.append(SemanticNode.epsilon())
+            else:
+                child_nodes.extend(SemanticNode(symbol) for symbol in production)
+            if node is not None:
+                node.children.extend(child_nodes)
+            for symbol, child in reversed(list(zip(production, child_nodes))):
                 if symbol != EPSILON:
-                    stack.append(symbol)
+                    stack.append((symbol, child))
 
         current = stream.current if not stream.at_end else EOF_TOKEN
         return LL1ParseResult(
             accepted=False,
             steps=steps,
+            tree=root,
             error=_unexpected_token_message(current, {END_MARKER}, "EOF inesperado"),
             token=current,
             expected={END_MARKER},
@@ -508,12 +532,17 @@ def _unexpected_token_message(token: Token, expected: Set[str], detail: str) -> 
     )
 
 
-def _recover_ll1_terminal(expected: str, stream: TokenStream, stack: List[str]) -> None:
+def _recover_ll1_terminal(
+    expected: str,
+    stream: TokenStream,
+    stack: List[Tuple[str, Optional[SemanticNode]]],
+    node: Optional[SemanticNode],
+) -> None:
     """Descarta un token inesperado o inserta implicitamente el terminal faltante."""
     if _normalize_eof_type(stream.current.type) == END_MARKER:
         return
     stream.consume()
-    stack.append(expected)
+    stack.append((expected, node))
 
 
 def _recover_ll1_non_terminal(
@@ -521,7 +550,8 @@ def _recover_ll1_non_terminal(
     row: Dict[str, List[List[str]]],
     follow: Dict[str, Set[str]],
     stream: TokenStream,
-    stack: List[str],
+    stack: List[Tuple[str, Optional[SemanticNode]]],
+    node: Optional[SemanticNode],
 ) -> None:
     """Recuperacion panic-mode para no terminales usando FIRST/FOLLOW."""
     expected = set(row)
@@ -532,11 +562,14 @@ def _recover_ll1_non_terminal(
 
     lookahead_type = _normalize_eof_type(stream.current.type)
     if lookahead_type in expected:
-        stack.append(non_terminal)
+        stack.append((non_terminal, node))
 
 
-def _recover_ll1_end_marker(stream: TokenStream, stack: List[str]) -> None:
+def _recover_ll1_end_marker(
+    stream: TokenStream,
+    stack: List[Tuple[str, Optional[SemanticNode]]],
+) -> None:
     """Descarta tokens extra hasta EOF y reintenta aceptar."""
     while _normalize_eof_type(stream.current.type) != END_MARKER:
         stream.consume()
-    stack.append(END_MARKER)
+    stack.append((END_MARKER, None))

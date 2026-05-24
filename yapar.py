@@ -32,6 +32,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("--dot", dest="dot_file", help="Ruta para exportar el automata LR(0) DOT")
     parser.add_argument("--json", dest="json_file", help="Ruta para exportar estructuras JSON")
+    parser.add_argument("--tree", action="store_true", help="Muestra el arbol semantico si la entrada es aceptada")
+    parser.add_argument("--tree-dot", dest="tree_dot_file", help="Ruta para exportar el arbol semantico DOT")
+    parser.add_argument("--tree-json", dest="tree_json_file", help="Ruta para exportar el arbol semantico JSON")
     parser.add_argument("--verbose", action="store_true", help="Muestra pasos del parser")
     parser.add_argument(
         "--recover",
@@ -60,6 +63,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         method=args.method,
         dot_file=args.dot_file,
         json_file=args.json_file,
+        tree_dot_file=args.tree_dot_file,
+        tree_json_file=args.tree_json_file,
+        show_tree=args.tree,
         verbose=args.verbose,
         recover=args.recover,
     )

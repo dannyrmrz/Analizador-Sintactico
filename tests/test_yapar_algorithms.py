@@ -11,8 +11,10 @@ sys.path.insert(0, str(SYNTACTIC_DIR))
 from ll1_analyzer import LL1Analyzer
 from lalr_parser import LALRParser
 from lr0_automaton import LR0Automaton
+from semantic_tree import SemanticNode
 from slr_parser import SLRParser
 from token_stream import Token
+from yapar_runtime import run_yapar
 from yalp_parser import parse_yalp
 
 
@@ -81,6 +83,10 @@ class YaparAlgorithmTests(unittest.TestCase):
         result = analyzer.parse(tokens)
 
         self.assertTrue(result.accepted, result.error)
+        self.assertIsNotNone(result.tree)
+        self.assertEqual(result.tree.symbol, "expr")
+        self.assertEqual(result.tree.children[0].symbol, "NUMBER")
+        self.assertEqual(result.tree.children[0].lexeme, "1")
 
     def test_ll1_parser_reports_syntax_error(self) -> None:
         spec = parse_yalp(LL1_GRAMMAR)
@@ -135,7 +141,10 @@ class YaparAlgorithmTests(unittest.TestCase):
 
         self.assertFalse(ll1.is_ll1)
         self.assertTrue(parser.is_slr1)
-        self.assertTrue(parser.parse(tokens).accepted)
+        result = parser.parse(tokens)
+        self.assertTrue(result.accepted)
+        self.assertIsNotNone(result.tree)
+        self.assertEqual(result.tree.symbol, "expr")
 
     def test_slr_conflict_is_reported(self) -> None:
         spec = parse_yalp(SLR_CONFLICT)
@@ -157,7 +166,9 @@ class YaparAlgorithmTests(unittest.TestCase):
 
         self.assertFalse(slr.is_slr1)
         self.assertTrue(lalr.is_lalr1, [c.text(lalr.productions) for c in lalr.conflicts])
-        self.assertTrue(lalr.parse(tokens).accepted)
+        result = lalr.parse(tokens)
+        self.assertTrue(result.accepted)
+        self.assertIsNotNone(result.tree)
 
     def test_lalr_reports_syntax_error_with_expected_tokens(self) -> None:
         spec = parse_yalp(LALR_NOT_SLR)
@@ -188,6 +199,32 @@ class YaparAlgorithmTests(unittest.TestCase):
         self.assertFalse(result.accepted)
         self.assertTrue(result.recovered)
         self.assertGreaterEqual(len(result.errors), 1)
+
+    def test_semantic_tree_round_trips_as_json_dict(self) -> None:
+        tree = SemanticNode(
+            "expr",
+            children=[
+                SemanticNode("NUMBER", lexeme="1", line=1, column=1),
+                SemanticNode("exprp", children=[SemanticNode.epsilon()]),
+            ],
+        )
+
+        restored = SemanticNode.from_dict(tree.to_dict())
+
+        self.assertEqual(restored.to_dict(), tree.to_dict())
+        self.assertIn("NUMBER '1' @ 1:1", restored.pretty())
+
+    def test_runtime_returns_semantic_tree_for_frontend(self) -> None:
+        result = run_yapar(
+            grammar_file=str(ROOT / "examples" / "calculator_parser.yalp"),
+            lexer_file=str(ROOT / "Analizador Lexico" / "examples" / "calculator.yal"),
+            input_file=str(ROOT / "examples" / "calculator_input_ok.txt"),
+            method="slr",
+        )
+
+        self.assertTrue(result.ok, result.message)
+        self.assertIsNotNone(result.tree)
+        self.assertEqual(result.tree.symbol, "expr")
 
 
 if __name__ == "__main__":
