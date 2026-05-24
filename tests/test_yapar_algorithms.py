@@ -9,6 +9,7 @@ SYNTACTIC_DIR = ROOT / "Analizador Sintactico"
 sys.path.insert(0, str(SYNTACTIC_DIR))
 
 from ll1_analyzer import LL1Analyzer
+from lalr_parser import LALRParser, lalr_status
 from lr0_automaton import LR0Automaton
 from slr_parser import SLRParser
 from token_stream import Token
@@ -63,6 +64,10 @@ class YaparAlgorithmTests(unittest.TestCase):
         result = analyzer.parse(tokens)
 
         self.assertTrue(result.accepted, result.error)
+        self.assertIsNotNone(result.tree)
+        self.assertEqual(result.tree.symbol, "expr")
+        self.assertEqual(result.tree.children[0].symbol, "NUMBER")
+        self.assertEqual(result.tree.children[0].lexeme, "1")
 
     def test_ll1_parser_reports_syntax_error(self) -> None:
         spec = parse_yalp(LL1_GRAMMAR)
@@ -101,7 +106,25 @@ class YaparAlgorithmTests(unittest.TestCase):
 
         self.assertFalse(ll1.is_ll1)
         self.assertTrue(parser.is_slr1)
-        self.assertTrue(parser.parse(tokens).accepted)
+        result = parser.parse(tokens)
+        self.assertTrue(result.accepted)
+        self.assertIsNotNone(result.tree)
+        self.assertEqual(result.tree.symbol, "expr")
+
+    def test_lalr_accepts_left_recursive_expression_grammar(self) -> None:
+        spec = parse_yalp(SLR_LEFT_RECURSIVE)
+        parser = LALRParser(spec)
+        tokens = [
+            Token("NUMBER", "1", 1, 1),
+            Token("PLUS", "+", 1, 3),
+            Token("NUMBER", "2", 1, 5),
+        ]
+
+        self.assertTrue(lalr_status().implemented)
+        self.assertTrue(parser.is_lalr1)
+        result = parser.parse(tokens)
+        self.assertTrue(result.accepted, result.error)
+        self.assertIsNotNone(result.tree)
 
     def test_slr_conflict_is_reported(self) -> None:
         spec = parse_yalp(SLR_CONFLICT)

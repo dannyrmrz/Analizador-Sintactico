@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 try:  # Permite importar como paquete o como script con sys.path.
+    from .semantic_tree import SemanticNode
     from .yalp_parser import EPSILON, END_MARKER, YalpSpec, format_production
     from .token_stream import EOF_TOKEN, Token, TokenStream
 except ImportError:  # pragma: no cover - ruta usada por el CLI de raiz.
+    from semantic_tree import SemanticNode
     from yalp_parser import EPSILON, END_MARKER, YalpSpec, format_production
     from token_stream import EOF_TOKEN, Token, TokenStream
 
@@ -54,6 +56,7 @@ class LL1ParseResult:
 
     accepted: bool
     steps: List[LL1ParseStep] = field(default_factory=list)
+    tree: Optional[SemanticNode] = None
     error: Optional[str] = None
     token: Optional[Token] = None
     expected: Set[str] = field(default_factory=set)
@@ -293,14 +296,18 @@ class LL1Analyzer:
             )
 
         stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
-        stack: List[str] = [END_MARKER, self.start_symbol]
+        root = SemanticNode(self.start_symbol)
+        stack: List[Tuple[str, Optional[SemanticNode]]] = [
+            (END_MARKER, None),
+            (self.start_symbol, root),
+        ]
         steps: List[LL1ParseStep] = []
 
         while stack:
-            top = stack.pop()
+            top, node = stack.pop()
             lookahead = stream.current
             lookahead_type = _normalize_eof_type(lookahead.type)
-            shown_stack = list(stack) + [top]
+            shown_stack = [symbol for symbol, _ in stack] + [top]
 
             if top == EPSILON:
                 _append_step(steps, verbose, shown_stack, lookahead_type, "epsilon")
@@ -309,10 +316,11 @@ class LL1Analyzer:
             if top == END_MARKER:
                 if lookahead_type == END_MARKER:
                     _append_step(steps, verbose, shown_stack, lookahead_type, "accept")
-                    return LL1ParseResult(accepted=True, steps=steps)
+                    return LL1ParseResult(accepted=True, steps=steps, tree=root)
                 return LL1ParseResult(
                     accepted=False,
                     steps=steps,
+                    tree=root,
                     error=_unexpected_token_message(
                         lookahead,
                         {END_MARKER},
@@ -324,6 +332,10 @@ class LL1Analyzer:
 
             if self.spec.is_terminal(top):
                 if top == lookahead_type:
+                    if node is not None:
+                        node.lexeme = lookahead.lexeme
+                        node.line = None if lookahead.line < 0 else lookahead.line
+                        node.column = None if lookahead.col < 0 else lookahead.col
                     stream.consume()
                     _append_step(
                         steps,
@@ -336,6 +348,7 @@ class LL1Analyzer:
                 return LL1ParseResult(
                     accepted=False,
                     steps=steps,
+                    tree=root,
                     error=_unexpected_token_message(
                         lookahead,
                         {top},
@@ -352,6 +365,7 @@ class LL1Analyzer:
                 return LL1ParseResult(
                     accepted=False,
                     steps=steps,
+                    tree=root,
                     error=_unexpected_token_message(
                         lookahead,
                         expected,
@@ -364,6 +378,7 @@ class LL1Analyzer:
                 return LL1ParseResult(
                     accepted=False,
                     steps=steps,
+                    tree=root,
                     error=f"Conflicto LL(1) en M[{top}, {lookahead_type}].",
                     token=lookahead,
                     expected={lookahead_type},
@@ -377,14 +392,22 @@ class LL1Analyzer:
                 lookahead_type,
                 format_production(top, production),
             )
-            for symbol in reversed(production):
+            child_nodes: List[SemanticNode] = []
+            if production == [EPSILON]:
+                child_nodes.append(SemanticNode.epsilon())
+            else:
+                child_nodes.extend(SemanticNode(symbol) for symbol in production)
+            if node is not None:
+                node.children.extend(child_nodes)
+            for symbol, child in reversed(list(zip(production, child_nodes))):
                 if symbol != EPSILON:
-                    stack.append(symbol)
+                    stack.append((symbol, child))
 
         current = stream.current if not stream.at_end else EOF_TOKEN
         return LL1ParseResult(
             accepted=False,
             steps=steps,
+            tree=root,
             error=_unexpected_token_message(current, {END_MARKER}, "EOF inesperado"),
             token=current,
             expected={END_MARKER},

@@ -11,13 +11,15 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 try:
     from .ll1_analyzer import LL1Analyzer
     from .lr0_automaton import LR0Automaton, LRProduction
+    from .semantic_tree import SemanticNode
     from .token_stream import EOF_TOKEN, Token, TokenStream
-    from .yalp_parser import END_MARKER, YalpSpec
+    from .yalp_parser import END_MARKER, EPSILON, YalpSpec
 except ImportError:  # pragma: no cover
     from ll1_analyzer import LL1Analyzer
     from lr0_automaton import LR0Automaton, LRProduction
+    from semantic_tree import SemanticNode
     from token_stream import EOF_TOKEN, Token, TokenStream
-    from yalp_parser import END_MARKER, YalpSpec
+    from yalp_parser import END_MARKER, EPSILON, YalpSpec
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class SLRParseResult:
 
     accepted: bool
     steps: List[SLRParseStep] = field(default_factory=list)
+    tree: Optional[SemanticNode] = None
     error: Optional[str] = None
     token: Optional[Token] = None
     expected: Set[str] = field(default_factory=set)
@@ -111,6 +114,7 @@ class SLRParser:
 
         stream = tokens if isinstance(tokens, TokenStream) else TokenStream(list(tokens))
         stack: List[int] = [0]
+        node_stack: List[SemanticNode] = []
         steps: List[SLRParseStep] = []
 
         while True:
@@ -124,6 +128,7 @@ class SLRParser:
                 return SLRParseResult(
                     accepted=False,
                     steps=steps,
+                    tree=node_stack[-1] if node_stack else None,
                     error=_unexpected_token_message(
                         lookahead,
                         expected,
@@ -138,41 +143,63 @@ class SLRParser:
             if action.kind == "shift":
                 assert action.target is not None
                 stack.append(action.target)
+                node_stack.append(SemanticNode.terminal(lookahead))
                 stream.consume()
                 continue
 
             if action.kind == "reduce":
                 assert action.production_index is not None
                 production = self.automaton.productions[action.production_index]
+                child_count = len(production.rhs)
+                if child_count > len(node_stack):
+                    return SLRParseResult(
+                        accepted=False,
+                        steps=steps,
+                        tree=node_stack[-1] if node_stack else None,
+                        error=f"Stack semantico invalido al reducir {production.text()}.",
+                        token=lookahead,
+                    )
+                children = node_stack[-child_count:] if child_count else [SemanticNode.epsilon()]
                 for _ in production.rhs:
                     if len(stack) == 1:
                         return SLRParseResult(
                             accepted=False,
                             steps=steps,
+                            tree=node_stack[-1] if node_stack else None,
                             error=f"Stack invalido al reducir {production.text()}.",
                             token=lookahead,
                         )
                     stack.pop()
+                if child_count:
+                    del node_stack[-child_count:]
                 goto_state = self.goto_table.get(stack[-1], {}).get(production.lhs)
                 if goto_state is None:
                     return SLRParseResult(
                         accepted=False,
                         steps=steps,
+                        tree=node_stack[-1] if node_stack else None,
                         error=(
                             f"No existe GOTO[{stack[-1]}, {production.lhs}] "
                             f"despues de reducir {production.text()}."
                         ),
                         token=lookahead,
                     )
+                parent = SemanticNode(production.lhs, children=list(children))
+                node_stack.append(parent)
                 stack.append(goto_state)
                 continue
 
             if action.kind == "accept":
-                return SLRParseResult(accepted=True, steps=steps)
+                return SLRParseResult(
+                    accepted=True,
+                    steps=steps,
+                    tree=node_stack[-1] if node_stack else None,
+                )
 
             return SLRParseResult(
                 accepted=False,
                 steps=steps,
+                tree=node_stack[-1] if node_stack else None,
                 error=f"Accion SLR desconocida: {action.kind}",
                 token=lookahead,
             )
