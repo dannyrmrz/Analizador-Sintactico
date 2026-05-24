@@ -32,7 +32,10 @@ El CLI acepta:
 - `--method ll1`: tabla y parser LL(1).
 - `--method lr0`: construye y exporta automata LR(0).
 - `--method slr`: tabla y parser SLR(1).
-- `--method lalr`: muestra estado pendiente de LALR.
+- `--method lalr`: construye tabla LALR(1) con items LR(1), fusion por core LR(0) y ejecuta el parser.
+- `--tree`: muestra el arbol semantico cuando la entrada es aceptada.
+- `--tree-json archivo.json`: exporta el arbol semantico en JSON.
+- `--tree-dot archivo.dot`: exporta el arbol semantico en DOT.
 - `--dot ruta.dot`: exporta automata LR(0).
 - `--json ruta.json`: exporta estructuras para una interfaz.
 - `--verbose`: muestra pasos del parser cuando se analiza una entrada.
@@ -108,13 +111,15 @@ python -m unittest tests/test_ll1_preprocessing.py tests/test_yapar_algorithms.p
 - Export DOT del automata LR(0).
 - Tabla ACTION/GOTO SLR(1).
 - Parser SLR(1) con shift/reduce/goto/accept.
+- Tabla ACTION/GOTO LALR(1) con items LR(1) y fusion por core LR(0).
+- Parser LALR(1).
 - Deteccion de conflictos shift/reduce y reduce/reduce.
-- JSON de estructuras para futura interfaz.
+- Arbol semantico en backend y frontend: LL(1), SLR(1) y LALR(1) lo devuelven como `SemanticNode`; el CLI lo muestra/exporta y la IDE lo renderiza como texto, JSON, DOT y vista navegable.
+- Interfaz grafica tipo IDE: ejecutar `python yapar_ide.py`.
+- JSON de estructuras para interfaz.
 
-## Que no funciona todavia
+## Pendiente tecnico
 
-- LALR(1) completo. Existe base en `lalr_parser.py`, pero falta LR(1), fusion de cores y tabla LALR.
-- Interfaz grafica tipo IDE. El CLI exporta JSON/DOT para conectarla despues.
 - Recuperacion avanzada de errores sintacticos. Hoy se reporta el error con linea, columna, token actual y esperados.
 
 ## Archivos principales tocados

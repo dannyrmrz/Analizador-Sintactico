@@ -60,6 +60,22 @@ class SemanticNode:
             data["children"] = [child.to_dict() for child in self.children]
         return data
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "SemanticNode":
+        """Reconstruye un nodo desde la representacion JSON exportada."""
+        children_data = data.get("children", [])
+        return cls(
+            symbol=str(data["symbol"]),
+            lexeme=None if "lexeme" not in data else str(data["lexeme"]),
+            line=_optional_int(data.get("line")),
+            column=_optional_int(data.get("column")),
+            children=[
+                cls.from_dict(child)
+                for child in children_data
+                if isinstance(child, dict)
+            ],
+        )
+
     def pretty(self, indent: str = "", is_last: bool = True) -> str:
         branch = "`- " if is_last else "|- "
         label = self.symbol
@@ -94,6 +110,10 @@ class SemanticNode:
         lines.append("}")
         return "\n".join(lines) + "\n"
 
+    def walk(self) -> Iterable[tuple["SemanticNode", int]]:
+        """Itera el arbol en preorden junto con la profundidad de cada nodo."""
+        yield from _walk(self, 0)
+
 
 def write_tree_json(tree: SemanticNode, path: str) -> None:
     Path(path).write_text(
@@ -105,6 +125,13 @@ def write_tree_json(tree: SemanticNode, path: str) -> None:
 
 def write_tree_dot(tree: SemanticNode, path: str) -> None:
     Path(path).write_text(tree.to_dot(), encoding="utf-8", newline="\n")
+
+
+def read_tree_json(path: str) -> SemanticNode:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("El JSON del arbol debe tener un objeto raiz.")
+    return SemanticNode.from_dict(data)
 
 
 def forest_pretty(trees: Iterable[SemanticNode]) -> str:
@@ -126,3 +153,15 @@ def _dot_escape(text: str) -> str:
         .replace('"', '\\"')
         .replace("\n", "\\n")
     )
+
+
+def _optional_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _walk(node: SemanticNode, depth: int) -> Iterable[tuple[SemanticNode, int]]:
+    yield node, depth
+    for child in node.children:
+        yield from _walk(child, depth + 1)

@@ -49,8 +49,10 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Automata LR(0): implementado y exportable a DOT.
 - [x] Tabla SLR(1): implementada en `SLRParser`.
 - [x] Parser SLR(1): implementado con stack de estados.
-- [~] LALR: existe base documentada en `lalr_parser.py`, pero no esta completo.
-- [x] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI principal puede ejecutar LL(1)/SLR con tokens reales.
+- [x] LALR: implementado con items LR(1), fusion por core LR(0), tabla ACTION/GOTO y parser.
+- [x] Integracion con lexer: `token_stream.py` extrae tokens desde `.yal/.yalex` o desde un lexer Python generado, parsea salida real del lexer, filtra tokens ignorados y el CLI principal puede ejecutar LL(1)/SLR/LALR con tokens reales.
+- [x] Arbol semantico: LL(1), SLR(1) y LALR(1) construyen `SemanticNode`; se puede mostrar/exportar en texto, JSON y DOT.
+- [x] GUI tipo IDE: `yapar_ide.py` permite editar gramatica/entrada, ejecutar YAPar y ver el arbol semantico en texto, JSON, DOT y vista navegable.
 
 ## 4. Faltantes detectados
 
@@ -70,8 +72,8 @@ Rama sugerida para continuar el proyecto completo: `feature/yapar-ll1-lr0-slr-in
 - [x] Exportacion/visualizacion de automata LR(0) en DOT.
 - [x] Tabla SLR(1).
 - [x] Parser SLR(1).
-- [~] LALR: base limpia y documentada; falta algoritmo LR(1)+merge.
-- [ ] GUI tipo IDE.
+- [x] LALR: algoritmo LR(1)+merge implementado.
+- [x] GUI tipo IDE.
 - [~] Reportes completos de errores sintacticos: ya incluyen token, linea, columna y esperados; no hay recuperacion avanzada.
 
 ## 5. Plan tecnico de implementacion
@@ -156,6 +158,18 @@ Generar un runner de parser y ejecutarlo:
 ```bash
 python yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" -o generated/theparser.py --method slr
 python generated/theparser.py examples/calculator_input_ok.txt
+```
+
+Abrir la interfaz grafica tipo IDE:
+
+```bash
+python yapar_ide.py
+```
+
+Exportar el arbol semantico desde CLI:
+
+```bash
+python yapar.py examples/calculator_parser.yalp -l "Analizador Lexico/examples/calculator.yal" --input examples/calculator_input_ok.txt --method slr --tree --tree-json generated/semantic_tree.json --tree-dot generated/semantic_tree.dot
 ```
 
 Probar una gramatica no LL(1) pero SLR(1):

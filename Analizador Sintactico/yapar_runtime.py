@@ -46,6 +46,8 @@ except ImportError:  # pragma: no cover
 class RuntimeResult:
     ok: bool
     message: str
+    tree: Optional[SemanticNode] = None
+    method: str = ""
 
 
 def run_yapar(
@@ -63,7 +65,7 @@ def run_yapar(
     try:
         spec = parse_yalp_file(grammar_file)
     except YalpParseError as exc:
-        return RuntimeResult(False, str(exc))
+        return RuntimeResult(False, str(exc), method=method)
 
     lines = [
         "=== YAPar ===",
@@ -84,24 +86,24 @@ def run_yapar(
                 spec.ignored,
             )
         except RuntimeError as exc:
-            return RuntimeResult(False, str(exc))
+            return RuntimeResult(False, str(exc), method=method)
 
         lines.append("Lexer tokens: " + ", ".join(sorted(lexer_info.produced_token_names)))
         for warning in report.warnings:
             lines.append("Warning: " + warning)
         if report.errors:
             lines.extend("Error: " + error for error in report.errors)
-            return RuntimeResult(False, "\n".join(lines))
+            return RuntimeResult(False, "\n".join(lines), method=method)
 
         if input_file:
             try:
                 lexer_script = ensure_lexer_script(lexer_file)
                 lexer_output = run_lexer(lexer_script, input_file, ignored_tokens=spec.ignored)
             except RuntimeError as exc:
-                return RuntimeResult(False, str(exc))
+                return RuntimeResult(False, str(exc), method=method)
             if lexer_output.errors:
                 lines.extend("Lexical error: " + error for error in lexer_output.errors)
-                return RuntimeResult(False, "\n".join(lines))
+                return RuntimeResult(False, "\n".join(lines), method=method)
             observed_report = validate_tokens(
                 spec.tokens,
                 lexer_output.tokens,
@@ -112,14 +114,14 @@ def run_yapar(
                 lines.append("Warning: " + warning)
             if observed_report.errors:
                 lines.extend("Error: " + error for error in observed_report.errors)
-                return RuntimeResult(False, "\n".join(lines))
+                return RuntimeResult(False, "\n".join(lines), method=method)
 
     if method == "ll1":
         analyzer = LL1Analyzer(spec)
         lines.append(analyzer.report_conflicts())
         if input_file:
             if lexer_output is None:
-                return RuntimeResult(False, "Para parsear entrada con LL(1) se requiere -l y --input.")
+                return RuntimeResult(False, "Para parsear entrada con LL(1) se requiere -l y --input.", method=method)
             result = analyzer.parse(token_stream_from_lexer_output(lexer_output), verbose=verbose)
             lines.extend(_format_ll1_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
@@ -133,8 +135,8 @@ def run_yapar(
             )
             if result.error:
                 lines.append("Error: " + result.error)
-            return RuntimeResult(result.accepted, "\n".join(lines))
-        return RuntimeResult(analyzer.is_ll1, "\n".join(lines))
+            return RuntimeResult(result.accepted, "\n".join(lines), tree=result.tree, method=method)
+        return RuntimeResult(analyzer.is_ll1, "\n".join(lines), method=method)
 
     if method == "lr0":
         automaton = LR0Automaton.build(spec)
@@ -148,7 +150,7 @@ def run_yapar(
             )
             lines.append(f"LR(0) JSON: {json_file}")
         lines.append(f"LR(0) states: {len(automaton.states)}")
-        return RuntimeResult(True, "\n".join(lines))
+        return RuntimeResult(True, "\n".join(lines), method=method)
 
     if method == "slr":
         parser = SLRParser(spec)
@@ -174,12 +176,12 @@ def run_yapar(
                 "Conflict: " + conflict.text(parser.automaton.productions)
                 for conflict in parser.conflicts
             )
-            return RuntimeResult(False, "\n".join(lines))
+            return RuntimeResult(False, "\n".join(lines), method=method)
         lines.append(f"SLR states: {len(parser.automaton.states)}")
         lines.append("SLR table: OK")
         if input_file:
             if lexer_output is None:
-                return RuntimeResult(False, "Para parsear entrada con SLR(1) se requiere -l y --input.")
+                return RuntimeResult(False, "Para parsear entrada con SLR(1) se requiere -l y --input.", method=method)
             result = parser.parse(token_stream_from_lexer_output(lexer_output), verbose=verbose)
             lines.extend(_format_slr_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
@@ -193,8 +195,8 @@ def run_yapar(
             )
             if result.error:
                 lines.append("Error: " + result.error)
-            return RuntimeResult(result.accepted, "\n".join(lines))
-        return RuntimeResult(True, "\n".join(lines))
+            return RuntimeResult(result.accepted, "\n".join(lines), tree=result.tree, method=method)
+        return RuntimeResult(True, "\n".join(lines), method=method)
 
     if method == "lalr":
         parser = LALRParser(spec)
@@ -212,12 +214,12 @@ def run_yapar(
                 "Conflict: " + conflict.text(parser.productions)
                 for conflict in parser.conflicts
             )
-            return RuntimeResult(False, "\n".join(lines))
+            return RuntimeResult(False, "\n".join(lines), method=method)
         lines.append(f"LALR states: {len(parser.states)}")
         lines.append("LALR table: OK")
         if input_file:
             if lexer_output is None:
-                return RuntimeResult(False, "Para parsear entrada con LALR(1) se requiere -l y --input.")
+                return RuntimeResult(False, "Para parsear entrada con LALR(1) se requiere -l y --input.", method=method)
             result = parser.parse(token_stream_from_lexer_output(lexer_output), verbose=verbose)
             lines.extend(_format_slr_steps(result.steps))
             lines.append("Accepted" if result.accepted else "Rejected")
@@ -231,10 +233,10 @@ def run_yapar(
             )
             if result.error:
                 lines.append("Error: " + result.error)
-            return RuntimeResult(result.accepted, "\n".join(lines))
-        return RuntimeResult(True, "\n".join(lines))
+            return RuntimeResult(result.accepted, "\n".join(lines), tree=result.tree, method=method)
+        return RuntimeResult(True, "\n".join(lines), method=method)
 
-    return RuntimeResult(False, f"Metodo desconocido: {method}")
+    return RuntimeResult(False, f"Metodo desconocido: {method}", method=method)
 
 
 def ensure_lexer_script(lexer_file: str) -> str:
